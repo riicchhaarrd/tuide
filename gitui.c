@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.7.1"
+#define VERSION        "2.7.2"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1920,11 +1920,12 @@ static void handle_cli_key(Key k){
     if(k.type==KEY_ESC){G.focus=FOCUS_CHANGES;return;}
     if(k.type==KEY_ENTER){
         if(G.cli_buf[0]){
-            OK("Executing: %s", G.cli_buf);
+            char cmd[INPUT_MAX]; snprintf(cmd, sizeof(cmd), "%s", G.cli_buf);
+            OK("Executing: %s", cmd);
             draw();
-            int r = system(G.cli_buf);
-            if(r==0)OK("Success: %s", G.cli_buf);
-            else ERR("Failed (%d): %s", r, G.cli_buf);
+            int r = system(cmd);
+            if(r==0)OK("Success: %s", cmd);
+            else ERR("Failed (%d): %s", r, cmd);
             G.cli_buf[0]='\0'; G.cli_cursor=0;
             reload_all();
         }
@@ -1961,6 +1962,7 @@ static void handle_cli_key(Key k){
         if(len+1<INPUT_MAX){
             memmove(&G.cli_buf[G.cli_cursor+1], &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
             G.cli_buf[G.cli_cursor++]=k.ch;
+            G.cli_buf[len+1]='\0';
         }
     }
 }
