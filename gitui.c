@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.9.1"
+#define VERSION        "2.9.2"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -217,6 +217,7 @@ typedef struct {
     /* Log/graph */
     GitCommit commits[MAX_COMMITS];
     int commit_count, commit_sel, commit_scroll;
+    int graph_file_sel;
     struct { int commit_idx, file_idx; } graph_rows[MAX_COMMITS*17];
     int graph_rows_count;
 
@@ -1138,15 +1139,20 @@ static void draw_graph(int top,int h){
         if(c->expanded && row+1 < lim){
             for(int fi=0; fi<c->f_count && row+1 < lim; fi++){
                 row++;
+                bool fsel = (sel && G.graph_file_sel == fi);
                 if(G.graph_rows_count < MAX_COMMITS*17){
                     G.graph_rows[G.graph_rows_count].commit_idx = i;
                     G.graph_rows[G.graph_rows_count].file_idx = fi;
                     G.graph_rows_count++;
                 }
-                at(row, 2); cbg(TH->bg_base); cfg(TH->fg_dim);
-                ppad("  │ ", 4);
-                cfg(TH->fg_accent2);
-                ppad(c->files[fi], iw-6);
+                at(row, 2); 
+                if(fsel){cbg(TH->bg_sel); G.cur_bold=true;} else cbg(TH->bg_base);
+                
+                cfg(TH->fg_dim);
+                ppad(fi == c->f_count-1 ? "  └─ " : "  ├─ ", 5);
+                
+                cfg(fsel ? TH->fg_sel : TH->fg_accent2);
+                ppad(c->files[fi], iw-7);
                 rst();
             }
         }
@@ -1944,11 +1950,13 @@ static void handle_mouse(MouseEvt m){
                             G.commits[ci].expanded = !G.commits[ci].expanded;
                             if(G.commits[ci].expanded) fetch_commit_files(ci);
                         } else {
+                            G.graph_file_sel = -1;
                             snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
                             load_commit_summary(G.commits[ci].hash);
                         }
                     } else {
                         /* Clicked on a file under a commit */
+                        G.graph_file_sel = fi;
                         char *fpath = G.commits[ci].files[fi];
                         char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.commits[ci].hash, fpath);
                         char *o = git_run(cmd);
@@ -2186,20 +2194,86 @@ static void handle_key(Key k){
         } else if(G.focus==FOCUS_GRAPH){
             int cnt=G.commit_count,gvis=G.lh_gph-2;
             switch(k.type){
-            case KEY_UP:   msel(&G.commit_sel,&G.commit_scroll,cnt,-1,gvis);break;
-            case KEY_DOWN: msel(&G.commit_sel,&G.commit_scroll,cnt, 1,gvis);break;
-            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-gvis/2,gvis);break;
-            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, gvis/2,gvis);break;
-            case KEY_HOME: G.commit_sel=0;G.commit_scroll=0;break;
-            case KEY_END:  G.commit_sel=cnt>0?cnt-1:0;break;
+            case KEY_UP: {
+                if(G.graph_file_sel > -1) {
+                    G.graph_file_sel--;
+                } else {
+                    int old_sel = G.commit_sel;
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, -1, gvis);
+                    if(old_sel != G.commit_sel && G.commits[G.commit_sel].expanded && G.commits[G.commit_sel].f_count > 0) {
+                        G.graph_file_sel = G.commits[G.commit_sel].f_count - 1;
+                    }
+                }
+                break;
+            }
+            case KEY_DOWN: {
+                GitCommit *c = &G.commits[G.commit_sel];
+                if(c->expanded && G.graph_file_sel < c->f_count - 1) {
+                    G.graph_file_sel++;
+                } else {
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, 1, gvis);
+                    G.graph_file_sel = -1;
+                }
+                break;
+            }
+            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-gvis/2,gvis); G.graph_file_sel=-1; break;
+            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, gvis/2,gvis); G.graph_file_sel=-1; break;
+            case KEY_HOME: G.commit_sel=0;G.commit_scroll=0;G.graph_file_sel=-1; break;
+            case KEY_END:  G.commit_sel=cnt?cnt-1:0; G.graph_file_sel=-1; break;
             case KEY_ENTER:
                 if(G.commit_count>0){
                     GitCommit *c=&G.commits[G.commit_sel];
-                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    G.diff_staged=false; load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                    if(G.graph_file_sel == -1) {
+                        snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                        G.diff_staged=false; load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                    } else {
+                        char *fpath = c->files[G.graph_file_sel];
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                        char *o = git_run(cmd);
+                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
+                        G.diff_is_summary = false;
+                        snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", c->hash);
+                        parse_diff(o?o:""); free(o);
+                        G.focus=FOCUS_DIFF;
+                    }
                 }
                 break;
+            case KEY_CHAR:
+                if(k.ch==' ') {
+                    if(G.commit_count > 0) {
+                        G.commits[G.commit_sel].expanded = !G.commits[G.commit_sel].expanded;
+                        if(G.commits[G.commit_sel].expanded) fetch_commit_files(G.commit_sel);
+                    }
+                }
+                else if(k.ch=='a')action_stage_all();
+                else if(k.ch=='u')action_unstage_all();
+                else if(k.ch=='d')action_discard();
+                else if(k.ch=='='||k.ch=='>'){
+                    if(G.commit_count>0){
+                        GitCommit *c=&G.commits[G.commit_sel];
+                        c->expanded = !c->expanded;
+                        if(c->expanded) fetch_commit_files(G.commit_sel);
+                    }
+                }
+                else if(k.ch=='s')action_stash();
+                break;
             default:break;
+            }
+            /* Sync preview if navigating with keys */
+            if(G.commit_count > 0 && k.type != KEY_ENTER) {
+                GitCommit *c = &G.commits[G.commit_sel];
+                if(G.graph_file_sel == -1) {
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                    load_commit_summary(c->hash);
+                } else {
+                    char *fpath = c->files[G.graph_file_sel];
+                    char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                    char *o = git_run(cmd);
+                    snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
+                    G.diff_is_summary = false;
+                    snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", c->hash);
+                    parse_diff(o?o:""); free(o);
+                }
             }
         } else { /* FOCUS_DIFF */
             int dv=G.rows-4;
@@ -2256,29 +2330,75 @@ static void handle_key(Key k){
         if(!df){
             int cnt=G.commit_count;
             switch(k.type){
-            case KEY_UP:   msel(&G.commit_sel,&G.commit_scroll,cnt,-1,lh);break;
-            case KEY_DOWN: msel(&G.commit_sel,&G.commit_scroll,cnt, 1,lh);break;
-            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-lh/2,lh);break;
-            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, lh/2,lh);break;
-            case KEY_HOME: G.commit_sel=0;G.commit_scroll=0;break;
-            case KEY_END:  G.commit_sel=cnt>0?cnt-1:0;break;
+            case KEY_UP: {
+                if(G.graph_file_sel > -1) {
+                    G.graph_file_sel--;
+                } else {
+                    int old_sel = G.commit_sel;
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, -1, lh);
+                    if(old_sel != G.commit_sel && G.commits[G.commit_sel].expanded && G.commits[G.commit_sel].f_count > 0) {
+                        G.graph_file_sel = G.commits[G.commit_sel].f_count - 1;
+                    }
+                }
+                break;
+            }
+            case KEY_DOWN: {
+                GitCommit *c = &G.commits[G.commit_sel];
+                if(c->expanded && G.graph_file_sel < c->f_count - 1) {
+                    G.graph_file_sel++;
+                } else {
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, 1, lh);
+                    G.graph_file_sel = -1;
+                }
+                break;
+            }
+            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-lh/2,lh); G.graph_file_sel=-1; break;
+            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, lh/2,lh); G.graph_file_sel=-1; break;
+            case KEY_HOME: G.commit_sel=0;G.commit_scroll=0; G.graph_file_sel=-1; break;
+            case KEY_END:  G.commit_sel=cnt?cnt-1:0; G.graph_file_sel=-1; break;
             case KEY_ENTER:
                 if(G.commit_count>0){
                     GitCommit *c=&G.commits[G.commit_sel];
-                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    load_commit_summary(c->hash);G.focus=FOCUS_DIFF;
+                    if(G.graph_file_sel == -1) {
+                        snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                        load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                    } else {
+                        char *fpath = c->files[G.graph_file_sel];
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                        char *o = git_run(cmd);
+                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
+                        G.diff_is_summary = false;
+                        snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", c->hash);
+                        parse_diff(o?o:""); free(o);
+                        G.focus=FOCUS_DIFF;
+                    }
                 }
                 break;
-            case KEY_CHAR:if(k.ch=='n')action_new_branch();break;
+            case KEY_CHAR:
+                if(k.ch==' ') {
+                    if(G.commit_count > 0) {
+                        G.commits[G.commit_sel].expanded = !G.commits[G.commit_sel].expanded;
+                        if(G.commits[G.commit_sel].expanded) fetch_commit_files(G.commit_sel);
+                    }
+                }
+                else if(k.ch=='n')action_new_branch();
+                break;
             default:break;
             }
             /* auto-preview */
-            if(G.commit_count>0){
+            if(G.commit_count>0 && k.type != KEY_ENTER){
                 GitCommit *c=&G.commits[G.commit_sel];
-                char exp[24];snprintf(exp,sizeof(exp),"commit %s:",c->hash);
-                if(strncmp(G.diff_title,exp,strlen(exp))!=0){
+                if(G.graph_file_sel == -1) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                     load_commit_summary(c->hash);
+                } else {
+                    char *fpath = c->files[G.graph_file_sel];
+                    char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                    char *o = git_run(cmd);
+                    snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
+                    G.diff_is_summary = false;
+                    snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", c->hash);
+                    parse_diff(o?o:""); free(o);
                 }
             }
         } else {
