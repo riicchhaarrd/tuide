@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.6.0"
+#define VERSION        "2.7.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1104,11 +1104,24 @@ static void draw_diff(int top,int rx,int rw,int h){
             at(row,rx+1);
             char lno[16];
             switch(dl->type){
-            case 0: cbg(TH->bg_base);cfg(TH->fg_linenum);snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);ppad(lno,lnum_w+1);cfg(TH->fg_diff_ctx);ppad(dl->old_line,code_w);break;
-            case 1: cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);cfg(TH->fg_diff_add);G.cur_bold=true;ppad("+",1);ppad(dl->new_line,code_w-1);break;
-            case 2: cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);cfg(TH->fg_diff_del);G.cur_bold=true;ppad("-",1);ppad(dl->old_line,code_w-1);break;
-            case 3: cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);G.cur_bold=true;ppad(dl->new_line,code_w+lnum_w+2);break;
-            case 4: cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
+            case 0: /* Context */
+                cbg(TH->bg_base);cfg(TH->fg_linenum);snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);ppad(lno,lnum_w+1);
+                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w); break;
+            case 1: /* Added */
+                cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);
+                cfg(TH->fg_ok); ppad("+", 1); cfg(TH->fg_diff_add);G.cur_bold=true;ppad(dl->new_line,code_w-1);break;
+            case 2: /* Deleted */
+                cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);
+                cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del);G.cur_bold=true;ppad(dl->old_line,code_w-1);break;
+            case 3: /* Hunk header */
+                cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);G.cur_bold=true;
+                char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
+                if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
+                snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
+                ppad(hsub, code_w+lnum_w+2); break;
+            case 4: /* File header */
+                if(strstr(dl->new_line, "+++") || strstr(dl->old_line, "---")) { row--; continue; } /* Skip these */
+                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
             }
             rst();
         }
@@ -1117,20 +1130,27 @@ static void draw_diff(int top,int rx,int rw,int h){
         while(di<G.diff_count&&row<lim){
             DiffLine *dl=&G.diff_lines[di];
             if(dl->type==3||dl->type==4){
+                if(dl->type==4 && (strstr(dl->new_line, "+++") || strstr(dl->old_line, "---"))) { di++; continue; }
                 at(row,rx+1);
-                if(dl->type==3){cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);}
-                else{cbg(TH->bg_header);cfg(TH->fg_accent2);}
-                G.cur_bold=true;
-                ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);
+                if(dl->type==3){
+                    cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);
+                    char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
+                    if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
+                    snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
+                    G.cur_bold=true; ppad(hsub,rw-2);
+                } else {
+                    cbg(TH->bg_header);cfg(TH->fg_accent2); G.cur_bold=true;
+                    ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);
+                }
                 rst(); di++; row++; continue;
             }
             if(dl->type==0){
                 at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
                 char lno[16]; snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad(lno, lnum_w+1);
-                cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w);
+                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w);
                 at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
                 snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno); ppad(lno, lnum_w+1);
-                cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
+                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
                 rst(); di++; row++; continue;
             }
             DiffLine *od=NULL,*nd=NULL;
@@ -1141,9 +1161,9 @@ static void draw_diff(int top,int rx,int rw,int h){
             if(od){
                 cbg(TH->bg_diff_del);cfg(TH->fg_linenum);
                 char lno[16]; if(od->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,od->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
-                ppad(lno, lnum_w+1); cfg(TH->fg_diff_del); G.cur_bold=true; ppad(od->old_line,code_w);
+                ppad(lno, lnum_w+1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold=true; ppad(od->old_line,code_w);
             } else {
-                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+1;i++) put_cell(row, rx+1+i, " ");
+                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) put_cell(row, rx+1+i, " ");
             }
             rst();
             /* Right: new */
@@ -1151,9 +1171,9 @@ static void draw_diff(int top,int rx,int rw,int h){
             if(nd){
                 cbg(TH->bg_diff_add);cfg(TH->fg_linenum);
                 char lno[16]; if(nd->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,nd->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
-                ppad(lno, lnum_w+1); cfg(TH->fg_diff_add); G.cur_bold=true; ppad(nd->new_line,code_w);
+                ppad(lno, lnum_w+1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->fg_diff_add); G.cur_bold=true; ppad(nd->new_line,code_w);
             } else {
-                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+1;i++) put_cell(row, rx+half+1+i, " ");
+                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) put_cell(row, rx+half+1+i, " ");
             }
             rst(); row++;
         }
