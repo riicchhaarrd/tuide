@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.0.2"
+#define VERSION        "2.1.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -227,6 +227,13 @@ typedef struct {
 
     /* Layout */
     int lw, lh_chg, lh_gph, rx, rw;
+
+    /* Context Menu */
+    bool menu_active;
+    int  menu_x, menu_y, menu_w, menu_h;
+    char menu_items[12][32];
+    void (*menu_actions[12])(void);
+    int  menu_item_count;
 } State;
 
 static State G;
@@ -589,6 +596,41 @@ static void box_fill(int top,int col,int w,int h,Color c){
         at(r,col+1); cbg(c);
         for(int i=0;i<w-2;i++)putchar(' ');
         rst();
+    }
+}
+
+/* ================================================================
+   CONTEXT MENU
+================================================================ */
+static void menu_reset(int x, int y){
+    G.menu_active=true; G.menu_x=x; G.menu_y=y; G.menu_item_count=0;
+    G.menu_w=20; G.menu_h=2;
+}
+static void menu_add_item(const char *label, void (*action)(void)){
+    if(G.menu_item_count>=12)return;
+    snprintf(G.menu_items[G.menu_item_count],32,"%s",label);
+    G.menu_actions[G.menu_item_count]=action;
+    G.menu_item_count++;
+    G.menu_h++;
+    int l=(int)strlen(label)+4;
+    if(l>G.menu_w)G.menu_w=l;
+}
+static void draw_menu(void){
+    if(!G.menu_active)return;
+    int x=G.menu_x, y=G.menu_y, w=G.menu_w, h=G.menu_h;
+    if(x+w>G.cols)x=G.cols-w;
+    if(y+h>G.rows)y=G.rows-h;
+    if(x<1)x=1; if(y<1)y=1;
+    G.menu_x=x; G.menu_y=y;
+
+    box_top(y,x,w,"Menu",true);
+    box_sides(y,x,w,h);
+    box_fill(y,x,w,h,TH->bg_panel);
+    box_bot(y+h-1,x,w);
+    for(int i=0;i<G.menu_item_count;i++){
+        at(y+1+i,x+1);
+        cfg(TH->fg_normal);
+        printf(" %- *s ",w-4,G.menu_items[i]);
     }
 }
 
@@ -1137,6 +1179,7 @@ static void draw(void){
     }
     draw_statusbar();
     draw_prompt_overlay();
+    draw_menu();
     printf(T_SHOW);
     fflush(stdout);
 }
@@ -1385,7 +1428,56 @@ static void handle_mouse(MouseEvt m){
     bool su=(m.btn&64)&&!(m.btn&1);
     bool sd=(m.btn&64)&&(m.btn&1);
     bool cl=!su&&!sd&&!m.release&&(m.btn&3)!=3;
+    bool right_cl=cl && (m.btn&3)==2;
     int ct=2;
+
+    if(G.menu_active){
+        if(cl){
+            if(m.row>G.menu_y && m.row<G.menu_y+G.menu_h-1 && m.col>G.menu_x && m.col<G.menu_x+G.menu_w-1){
+                int idx=m.row-G.menu_y-1;
+                if(idx>=0 && idx<G.menu_item_count){
+                    void (*act)(void)=G.menu_actions[idx];
+                    G.menu_active=false;
+                    if(act)act();
+                    return;
+                }
+            }
+            G.menu_active=false;
+        }
+        return;
+    }
+
+    if(right_cl){
+        menu_reset(m.col, m.row);
+        if(G.current_view==VIEW_STATUS){
+            if(G.focus==FOCUS_CHANGES){
+                menu_add_item("Stage", action_stage);
+                menu_add_item("Stage All", action_stage_all);
+                menu_add_item("Unstage All", action_unstage_all);
+                menu_add_item("Discard", action_discard);
+                menu_add_item("Stash", action_stash);
+            } else {
+                menu_add_item("Commit", action_commit);
+                menu_add_item("Amend", action_amend);
+                menu_add_item("Push", action_push);
+                menu_add_item("Pull", action_pull);
+            }
+        } else if(G.current_view==VIEW_LOG){
+            menu_add_item("Reload", reload_all);
+            menu_add_item("Push", action_push);
+            menu_add_item("Pull", action_pull);
+        } else if(G.current_view==VIEW_BRANCHES){
+            menu_add_item("Checkout", action_checkout);
+            menu_add_item("New Branch", action_new_branch);
+            menu_add_item("Delete Branch", action_delete_branch);
+        } else if(G.current_view==VIEW_STASH){
+            menu_add_item("Apply", action_apply_stash);
+            menu_add_item("Pop", action_pop_stash);
+            menu_add_item("Drop", action_drop_stash);
+        }
+        menu_add_item("Cancel", NULL);
+        return;
+    }
 
     if(G.current_view==VIEW_STATUS){
         layout();
@@ -1488,6 +1580,7 @@ static bool vi_pre(Key *k){
    MAIN KEY HANDLER
 ================================================================ */
 static void handle_key(Key k){
+    if(G.menu_active){G.menu_active=false;return;}
     if(G.in_prompt){handle_prompt_key(k);return;}
     if(k.type==KEY_MOUSE){handle_mouse(k.mouse);return;}
     if(vi_pre(&k))return;
