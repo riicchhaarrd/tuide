@@ -38,7 +38,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.16.0"
+#define VERSION        "2.17.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -280,8 +280,9 @@ typedef struct {
     /* Layout */
     int sidebar_w;
     int lw, lh_chg, lh_gph, rx, rw;
-    int lw_custom, lh_chg_custom;
-    bool dragging_v, dragging_h, dragging_sc, dragging_diff;
+    int lh_log, dh_log;
+    int lw_custom, lh_chg_custom, lh_log_custom;
+    bool dragging_v, dragging_h, dragging_sc, dragging_diff, dragging_h_log;
     bool dragging_col_hash, dragging_col_author, dragging_col_date;
     int  col_hash_w, col_author_w, col_date_w;
     int  sc_y, sc_h, sc_total, sc_vis, sc_drag_offset;
@@ -513,8 +514,14 @@ static void layout(void){
     G.lh_gph=ch-G.lh_chg+1;
     if(G.lh_gph<4){G.lh_gph=4; G.lh_chg=ch-G.lh_gph+1;}
 
-    if(G.diff_split_custom > 0) G.diff_split = iclamp(G.diff_split_custom, 10, G.rw-10);
-    else G.diff_split = G.rw / 2;
+    int drw = (G.current_view == VIEW_LOG) ? G.cols : G.rw;
+    if(G.diff_split_custom > 0) G.diff_split = iclamp(G.diff_split_custom, 10, drw-10);
+    else G.diff_split = drw / 2;
+
+    if(G.lh_log_custom > 0) G.lh_log = iclamp(G.lh_log_custom, 4, ch-4);
+    else G.lh_log = ch * 55 / 100;
+    G.dh_log = ch - G.lh_log + 1;
+    if(G.dh_log < 4){ G.dh_log = 4; G.lh_log = ch - G.dh_log + 1; }
 }
 
 /* ================================================================
@@ -965,30 +972,42 @@ static void draw_cli(void){
 }
 
 static void draw_dividers(void){
-    if(G.current_view != VIEW_STATUS) return;
     int ct=2;
-    int vx = G.sidebar_w + G.lw;
-    /* Vertical divider */
-    if(vx >= 1 && vx <= G.cols){
-        for(int r=ct; r<G.rows-1; r++){
-            at(r, vx);
-            bool hover = (G.last_mx == vx && G.last_my == r);
-            if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, vx, "┃");}
-            else {cfg(TH->fg_dim); put_cell(r, vx, "│");}
-            rst();
+    if(G.current_view == VIEW_STATUS){
+        int vx = G.sidebar_w + G.lw;
+        /* Vertical divider */
+        if(vx >= 1 && vx <= G.cols){
+            for(int r=ct; r<G.rows-1; r++){
+                at(r, vx);
+                bool hover = (G.last_mx == vx && G.last_my == r);
+                if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, vx, "┃");}
+                else {cfg(TH->fg_dim); put_cell(r, vx, "│");}
+                rst();
+            }
         }
-    }
-    /* Horizontal divider */
-    if(G.browser_active) return;
-    int hr = ct + G.lh_chg - 1;
-    int hstart = G.sidebar_w + 1;
-    if(hr >= 1 && hr < G.rows){
-        for(int c=hstart; c<vx; c++){
-            at(hr, c);
-            bool hover = (G.last_my == hr && G.last_mx == c);
-            if(G.dragging_h || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(hr, c, "━");}
-            else {cfg(TH->fg_dim); put_cell(hr, c, "─");}
-            rst();
+        /* Horizontal divider */
+        if(G.browser_active) return;
+        int hr = ct + G.lh_chg - 1;
+        int hstart = G.sidebar_w + 1;
+        if(hr >= 1 && hr < G.rows){
+            for(int c=hstart; c<vx; c++){
+                at(hr, c);
+                bool hover = (G.last_my == hr && G.last_mx == c);
+                if(G.dragging_h || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(hr, c, "━");}
+                else {cfg(TH->fg_dim); put_cell(hr, c, "─");}
+                rst();
+            }
+        }
+    } else if(G.current_view == VIEW_LOG){
+        int hr = ct + G.lh_log - 1;
+        if(hr >= 1 && hr < G.rows){
+            for(int c=1; c<G.cols; c++){
+                at(hr, c);
+                bool hover = (G.last_my == hr && G.last_mx == c);
+                if(G.dragging_h_log || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(hr, c, "━");}
+                else {cfg(TH->fg_dim); put_cell(hr, c, "─");}
+                rst();
+            }
         }
     }
 }
@@ -2039,10 +2058,9 @@ static void draw(void){
         }
         break;
     case VIEW_LOG:{
-        int lh=ch*55/100, dh=ch-lh;
-        draw_log(ct,lh);
-        if(G.editor_active) draw_editor(ct+lh, 1, G.cols, dh);
-        else draw_diff(ct+lh,1,G.cols,dh);
+        draw_log(ct, G.lh_log);
+        if(G.editor_active) draw_editor(ct+G.lh_log, 1, G.cols, G.dh_log);
+        else draw_diff(ct+G.lh_log, 1, G.cols, G.dh_log);
         break;
     }
     case VIEW_BRANCHES: draw_branches(ct,ch); break;
@@ -2314,6 +2332,7 @@ static void handle_mouse(MouseEvt m){
     if(m.release){
         G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false; G.dragging_diff=false;
         G.dragging_col_hash=false; G.dragging_col_author=false; G.dragging_col_date=false;
+        G.dragging_h_log=false;
     }
 
     if(G.menu_active){
@@ -2333,10 +2352,14 @@ static void handle_mouse(MouseEvt m){
         return;
     }
 
+    int drx = (G.current_view == VIEW_LOG) ? 1 : G.lw + G.sidebar_w + 1;
+    int dtop = (G.current_view == VIEW_LOG) ? (ct + G.lh_log) : ct;
+
     if(motion){
         if(G.dragging_v){G.lw_custom=m.col - G.sidebar_w; layout(); return;}
         if(G.dragging_h){G.lh_chg_custom=m.row-ct+1; layout(); return;}
-        if(G.dragging_diff){G.diff_split_custom=m.col-G.rx; layout(); return;}
+        if(G.dragging_h_log){G.lh_log_custom=m.row-ct+1; layout(); return;}
+        if(G.dragging_diff){G.diff_split_custom=m.col-drx; layout(); return;}
         if(G.dragging_sc && G.sc_h > 0){
             int rel_y = m.row - G.sc_y;
             int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
@@ -2363,13 +2386,13 @@ static void handle_mouse(MouseEvt m){
             return;
         }
         if(G.ed_selecting){
-            G.ed_sel_end_y = G.editor.scroll_y + (m.row - (ct+1));
-            G.ed_sel_end_x = m.col - (G.rx + 7) + G.editor.scroll_x;
+            G.ed_sel_end_y = G.editor.scroll_y + (m.row - (dtop+1));
+            G.ed_sel_end_x = m.col - (drx + 7) + G.editor.scroll_x;
             return;
         }
         if(G.selecting){
-            G.sel_end_y = G.diff_scroll + (m.row - (ct+1));
-            G.sel_end_x = m.col - G.rx - 1;
+            G.sel_end_y = G.diff_scroll + (m.row - (dtop+1));
+            G.sel_end_x = m.col - drx - 1;
             return;
         }
         return;
@@ -2389,13 +2412,15 @@ static void handle_mouse(MouseEvt m){
         return;
     }
 
-    /* Right pane toggles */
-    if(cl && m.row == ct && m.col > G.rx){
+    /* Right pane toggles (Diff / Editor) */
+    int toggle_row = (G.current_view == VIEW_LOG) ? (ct + G.lh_log) : ct;
+    int toggle_min_x = (G.current_view == VIEW_LOG) ? 1 : G.rx;
+    if(cl && m.row == toggle_row && m.col > toggle_min_x){
         if(!G.editor_active){
             int unify_x = G.cols - 15;
             int hunk_x = G.cols - 7;
             if(m.col >= unify_x && m.col < unify_x + 7){ G.diff_sidebyside = !G.diff_sidebyside; return; }
-            if(m.col >= hunk_x && m.col < hunk_x + 6){ G.diff_continuous = !G.diff_continuous; update_diff(); return; }
+            if(m.col >= hunk_x && m.col < hunk_x + 6){ G.diff_continuous = !G.diff_continuous; sync_graph_preview(); update_diff(); return; }
         } else {
             int save_x = G.cols - 8;
             if(m.col >= save_x && m.col < save_x + 6){ editor_save(); return; }
@@ -2403,7 +2428,6 @@ static void handle_mouse(MouseEvt m){
     }
 
     if(cl && m.row==1){
-        /* ... */
         if(m.col>=G.tab_x[0] && m.col<G.tab_x[1]) G.current_view=VIEW_STATUS;
         else if(m.col>=G.tab_x[1] && m.col<G.tab_x[2]) G.current_view=VIEW_LOG;
         else if(m.col>=G.tab_x[2] && m.col<G.tab_x[3]) G.current_view=VIEW_BRANCHES;
@@ -2412,15 +2436,15 @@ static void handle_mouse(MouseEvt m){
         else if(m.col>=G.tab_x[5] && m.col<G.tab_x[6]) G.current_view=VIEW_HELP;
         return;
     }
-    if(cl && G.current_view == VIEW_STATUS && m.col > G.lw && m.row > ct && m.row < G.rows-1){
+    if(cl && (G.current_view == VIEW_STATUS || G.current_view == VIEW_LOG) && m.col > drx && m.row > dtop && m.row < G.rows-1){
         if(G.editor_active){
             G.ed_selecting = true;
-            G.ed_sel_start_y = G.ed_sel_end_y = G.editor.scroll_y + (m.row - (ct+1));
-            G.ed_sel_start_x = G.ed_sel_end_x = m.col - (G.rx + 7) + G.editor.scroll_x;
+            G.ed_sel_start_y = G.ed_sel_end_y = G.editor.scroll_y + (m.row - (dtop+1));
+            G.ed_sel_start_x = G.ed_sel_end_x = m.col - (drx + 7) + G.editor.scroll_x;
         } else {
             G.selecting = true;
-            G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (ct+1));
-            G.sel_start_x = G.sel_end_x = m.col - G.rx - 1;
+            G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (dtop+1));
+            G.sel_start_x = G.sel_end_x = m.col - drx - 1;
         }
     } else if(cl){
         G.selecting = false;
@@ -2437,7 +2461,7 @@ static void handle_mouse(MouseEvt m){
         int vx = G.sidebar_w + G.lw;
         if(cl && m.col==vx){G.dragging_v=true; return;}
         if(cl && m.col<vx && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
-        if(cl && G.diff_sidebyside && m.col==G.rx+G.diff_split){G.dragging_diff=true; return;}
+        if(cl && G.diff_sidebyside && m.col==drx+G.diff_split){G.dragging_diff=true; return;}
         
         if(cl && G.focus == FOCUS_GRAPH){
             int cur_x = 2 + GRAPH_COLS;
@@ -2548,10 +2572,13 @@ static void handle_mouse(MouseEvt m){
             if(sd)G.diff_scroll+=3;
         }
     } else if(G.current_view==VIEW_LOG){
-        int lh=(G.rows-2)*55/100;
+        int lh=G.lh_log;
         bool in_log=(m.row<ct+lh);
         int vis=lh-2;
         
+        if(cl && m.row == ct + lh - 1){ G.dragging_h_log = true; return; }
+        if(cl && G.diff_sidebyside && m.col == drx + G.diff_split){ G.dragging_diff = true; return; }
+
         if(cl){
             int cur_x = 2 + GRAPH_COLS;
             if(m.col == cur_x + G.col_hash_w) { G.dragging_col_hash = true; return; }
