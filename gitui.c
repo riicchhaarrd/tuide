@@ -38,7 +38,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.13.0"
+#define VERSION        "2.14.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -270,6 +270,9 @@ typedef struct {
     char browser_path[512];
     bool editor_active;   /* Right pane toggle: false=Diff, true=Editor */
     bool browser_active;  /* Left pane toggle:  false=Git,  true=Browser */
+    int ed_sel_start_y, ed_sel_start_x;
+    int ed_sel_end_y, ed_sel_end_x;
+    bool ed_selecting;
 
     /* Selection in Diff */
     int sel_start_y, sel_start_x;
@@ -278,6 +281,7 @@ typedef struct {
     char *clipboard;
 
     /* Layout */
+    int sidebar_w;
     int lw, lh_chg, lh_gph, rx, rw;
     int lw_custom, lh_chg_custom;
     bool dragging_v, dragging_h, dragging_sc, dragging_diff;
@@ -501,10 +505,11 @@ static void ppad(const char *s,int w){
 }
 
 static void layout(void){
+    G.sidebar_w = 4;
     if(G.lw_custom > 0) G.lw = iclamp(G.lw_custom, 20, G.cols-20);
     else G.lw=imax(26,imin(48,G.cols*32/100));
     
-    G.rx=G.lw+1; G.rw=G.cols-G.lw;
+    G.rx=G.sidebar_w+G.lw+1; G.rw=G.cols-G.rx+1;
     int ch=G.rows-2;
     
     if(G.lh_chg_custom > 0) G.lh_chg = iclamp(G.lh_chg_custom, 4, ch-4);
@@ -817,7 +822,7 @@ static void reload_all(void){
 /* ================================================================
    BOX DRAWING HELPERS
 ================================================================ */
-static void box_top(int row,int col,int w,const char *title,bool active){
+static void box_top(int row,int col,int w,const char *title,bool active, const char *extra){
     at(row,col);
     if(active){G.cur_bold=true;cfg(TH->fg_accent1);}else cfg(TH->fg_dim);
     put_cell(row,col,"┌");
@@ -831,7 +836,21 @@ static void box_top(int row,int col,int w,const char *title,bool active){
     
     if(active){G.cur_bold=true;cfg(TH->fg_accent1);}else{rst();cfg(TH->fg_dim);}
     int right=w-2-left-tlen;
-    for(int i=0;i<right;i++)put_cell(row, col+1+left+tlen+i,"─");
+    
+    if(extra){
+        int elen = (int)strlen(extra);
+        if(right > elen + 2){
+            for(int i=0;i<right-elen-2;i++)put_cell(row, col+1+left+tlen+i,"─");
+            at(row, col+w-elen-2);
+            ppad(extra, elen);
+            put_cell(row, col+w-2, "─");
+        } else {
+            for(int i=0;i<right;i++)put_cell(row, col+1+left+tlen+i,"─");
+        }
+    } else {
+        for(int i=0;i<right;i++)put_cell(row, col+1+left+tlen+i,"─");
+    }
+    
     put_cell(row, col+w-1, "┐");
     rst();
 }
@@ -877,7 +896,7 @@ static void draw_menu(void){
     if(x<1)x=1; if(y<1)y=1;
     G.menu_x=x; G.menu_y=y;
 
-    box_top(y,x,w,"Menu",true);
+    box_top(y,x,w,"Menu",true,NULL);
     box_sides(y,x,w,h);
     box_fill(y,x,w,h,TH->bg_panel);
     box_bot(y+h-1,x,w);
@@ -1053,10 +1072,11 @@ static void fetch_commit_files(int idx){
 static void draw_changes(int top,int h){
     if(h<=2) return;
     int w=G.lw;
+    int sx=G.sidebar_w+1;
     bool act=(G.focus==FOCUS_CHANGES&&G.current_view==VIEW_STATUS);
-    box_top(top,1,w,"Changes",act);
-    box_sides(top,1,w,h);
-    box_fill(top,1,w,h,TH->bg_panel);
+    box_top(top,sx,w,"Changes",act,NULL);
+    box_sides(top,sx,w,h);
+    box_fill(top,sx,w,h,TH->bg_panel);
 
     int staged_n=0,unstaged_n=0;
     for(int i=0;i<G.file_count;i++) G.files[i].staged?staged_n++:unstaged_n++;
@@ -1065,14 +1085,14 @@ static void draw_changes(int top,int h){
 
     /* ── Staged section ── */
     if(row<lim){
-        at(row,2); cbg(TH->bg_header); cfg(TH->fg_staged); G.cur_bold=true;
+        at(row,sx+1); cbg(TH->bg_header); cfg(TH->fg_staged); G.cur_bold=true;
         char hdr[64]; snprintf(hdr,sizeof(hdr)," ✓ Staged (%d) ",staged_n);
         ppad(hdr,iw); rst(); row++;
     }
     for(int i=0;i<G.file_count&&row<lim;i++){
         if(!G.files[i].staged)continue;
         bool sel=(G.file_sel==i&&act);
-        at(row,2);
+        at(row,sx+1);
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}else cbg(TH->bg_panel);
         cfg(sel?TH->fg_sel:TH->fg_staged);
         const char *ic=" M";
@@ -1089,18 +1109,18 @@ static void draw_changes(int top,int h){
         ppad(disp,iw-3); rst(); row++;
     }
     /* spacer */
-    if(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
+    if(row<lim){at(row,sx+1);cbg(TH->bg_panel);for(int i=0;i<iw;i++)put_cell(row,sx+1+i," ");rst();row++;}
 
     /* ── Unstaged section ── */
     if(row<lim){
-        at(row,2); cbg(TH->bg_header); cfg(TH->fg_unstaged); G.cur_bold=true;
+        at(row,sx+1); cbg(TH->bg_header); cfg(TH->fg_unstaged); G.cur_bold=true;
         char hdr[64]; snprintf(hdr,sizeof(hdr)," ✗ Unstaged (%d) ",unstaged_n);
         ppad(hdr,iw); rst(); row++;
     }
     for(int i=0;i<G.file_count&&row<lim;i++){
         if(G.files[i].staged)continue;
         bool sel=(G.file_sel==i&&act);
-        at(row,2);
+        at(row,sx+1);
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}else cbg(TH->bg_panel);
         Color ic_col=TH->fg_unstaged;
         const char *ic=" M";
@@ -1115,8 +1135,8 @@ static void draw_changes(int top,int h){
         ppad(G.files[i].path,iw-3); rst(); row++;
     }
     /* fill */
-    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
-    box_bot(top+h-1,1,w);
+    while(row<lim){at(row,sx+1);cbg(TH->bg_panel);for(int i=0;i<iw;i++)put_cell(row,sx+1+i," ");rst();row++;}
+    box_bot(top+h-1,sx,w);
 }
 
 /* ================================================================
@@ -1125,14 +1145,15 @@ static void draw_changes(int top,int h){
 static void draw_graph(int top,int h){
     if(h<=2) return;
     int w=G.lw;
+    int sx=G.sidebar_w+1;
     bool act=(G.focus==FOCUS_GRAPH&&G.current_view==VIEW_STATUS);
-    box_top(top,1,w,"Graph",act);
-    box_sides(top,1,w,h);
-    box_fill(top,1,w,h,TH->bg_base);
+    box_top(top,sx,w,"Graph",act,NULL);
+    box_sides(top,sx,w,h);
+    box_fill(top,sx,w,h,TH->bg_base);
 
     int row=top+1,lim=top+h-1,iw=w-2;
     int vis=lim-row;
-    if(vis<=0) { box_bot(top+h-1,1,w); return; }
+    if(vis<=0) { box_bot(top+h-1,sx,w); return; }
 
     if(G.commit_sel<G.commit_scroll)G.commit_scroll=G.commit_sel;
     if(G.commit_sel>=G.commit_scroll+vis)G.commit_scroll=G.commit_sel-vis+1;
@@ -1148,7 +1169,7 @@ static void draw_graph(int top,int h){
             G.graph_rows_count++;
         }
 
-        at(row,2);
+        at(row,sx+1);
         if(sel){cbg(TH->bg_sel); G.cur_bold=true;}else cbg(TH->bg_base);
 
         /* Expansion indicator */
@@ -1157,7 +1178,7 @@ static void draw_graph(int top,int h){
 
         /* Graph chars */
         char *gp=c->graph; int gc=0;
-        int gx = 4;
+        int gx = sx+3;
         while(*gp&&gc<GRAPH_COLS){
             int ci_=(c->graph_col/2)%6;
             at(row, gx+gc);
@@ -1201,7 +1222,7 @@ static void draw_graph(int top,int h){
                     G.graph_rows[G.graph_rows_count].file_idx = fi;
                     G.graph_rows_count++;
                 }
-                at(row, 2); 
+                at(row, sx+1); 
                 if(fsel){cbg(TH->bg_sel); G.cur_bold=true;} else cbg(TH->bg_base);
                 
                 cfg(TH->fg_dim);
@@ -1213,14 +1234,29 @@ static void draw_graph(int top,int h){
             }
         }
     }
-    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
-    box_bot(top+h-1,1,w);
+    while(row<lim){at(row,sx+1);cbg(TH->bg_base);for(int i=0;i<iw;i++)put_cell(row,sx+1+i," ");rst();row++;}
+    box_bot(top+h-1,sx,w);
 }
 
 /* ================================================================
    DIFF PANE (side-by-side + unified)
 ================================================================ */
-/* Selection check */
+/* Selection check for editor */
+static bool is_ed_selected(int y, int x){
+    if(!G.ed_selecting) return false;
+    int s_y = G.ed_sel_start_y, s_x = G.ed_sel_start_x;
+    int e_y = G.ed_sel_end_y, e_x = G.ed_sel_end_x;
+    if(s_y > e_y || (s_y == e_y && s_x > e_x)){
+        int t=s_y; s_y=e_y; e_y=t;
+        t=s_x; s_x=e_x; e_x=t;
+    }
+    if(y < s_y || y > e_y) return false;
+    if(y == s_y && x < s_x) return false;
+    if(y == e_y && x > e_x) return false;
+    return true;
+}
+
+/* Selection check for diff */
 static bool is_selected(int y, int x){
     if(!G.selecting) return false;
     int s_y = G.sel_start_y, s_x = G.sel_start_x;
@@ -1264,7 +1300,10 @@ static void draw_diff(int top,int rx,int rw,int h){
     if(G.diff_title[0])snprintf(title,sizeof(title),"%.60s%s",G.diff_title,G.diff_staged?" [staged]":"");
     else snprintf(title,sizeof(title),"Diff (select file or commit)");
 
-    box_top(top,rx,rw,title,act);
+    char extra[64];
+    snprintf(extra, sizeof(extra), " [%s] [%s] ", G.diff_sidebyside?"Split":"Unify", G.diff_continuous?"Full":"Hunk");
+
+    box_top(top,rx,rw,title,act,extra);
     box_sides(top,rx,rw,h);
     box_fill(top,rx,rw,h,TH->bg_base);
     box_bot(top+h-1,rx,rw);
@@ -1475,7 +1514,7 @@ static void draw_diff(int top,int rx,int rw,int h){
 ================================================================ */
 static void draw_log(int top,int h){
     int w=G.cols;
-    box_top(top,1,w,"Commit Log",true);
+    box_top(top,1,w,"Commit Log",true,NULL);
     box_sides(top,1,w,h);
     box_fill(top,1,w,h,TH->bg_base);
     box_bot(top+h-1,1,w);
@@ -1528,7 +1567,7 @@ static void draw_log(int top,int h){
 ================================================================ */
 static void draw_branches(int top,int h){
     int w=G.cols;
-    box_top(top,1,w,"Branches",true);
+    box_top(top,1,w,"Branches",true,NULL);
     box_sides(top,1,w,h);
     box_fill(top,1,w,h,TH->bg_panel);
     box_bot(top+h-1,1,w);
@@ -1571,7 +1610,7 @@ static void draw_branches(int top,int h){
 static void draw_stash(int top,int h){
     int w=G.cols; char title[64];
     snprintf(title,sizeof(title),"Stash (%d)",G.stash_count);
-    box_top(top,1,w,title,true);
+    box_top(top,1,w,title,true,NULL);
     box_sides(top,1,w,h);
     box_fill(top,1,w,h,TH->bg_panel);
     box_bot(top+h-1,1,w);
@@ -1598,7 +1637,7 @@ static void draw_stash(int top,int h){
 ================================================================ */
 static void draw_help(int top,int h){
     int w=G.cols;
-    box_top(top,1,w,"Help & Keybindings",true);
+    box_top(top,1,w,"Help & Keybindings",true,NULL);
     box_sides(top,1,w,h);
     box_fill(top,1,w,h,TH->bg_panel);
     box_bot(top+h-1,1,w);
@@ -1797,24 +1836,25 @@ static void editor_save(void){
 
 static void draw_browser(int top, int h){
     int w = G.lw;
+    int sx = G.sidebar_w+1;
     bool act = (G.focus == FOCUS_BROWSER);
-    box_top(top, 1, w, "Files", act);
-    box_sides(top, 1, w, h);
-    box_fill(top, 1, w, h, TH->bg_panel);
+    box_top(top, sx, w, "Files", act, NULL);
+    box_sides(top, sx, w, h);
+    box_fill(top, sx, w, h, TH->bg_panel);
     int row = top+1, lim = top+h-1;
     if(G.browser_sel < G.browser_scroll) G.browser_scroll = G.browser_sel;
     if(G.browser_sel >= G.browser_scroll + (lim-row)) G.browser_scroll = G.browser_sel - (lim-row) + 1;
 
     for(int i=G.browser_scroll; i<G.browser_count && row < lim; i++, row++){
         bool sel = (i == G.browser_sel && act);
-        at(row, 2);
+        at(row, sx+1);
         if(sel){cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true;} else cbg(TH->bg_panel);
         if(G.browser_files[i].is_dir){ cfg(sel?TH->fg_sel:TH->fg_accent1); ppad("📁 ", 3); }
         else { cfg(sel?TH->fg_sel:TH->fg_normal); ppad("📄 ", 3); }
         ppad(G.browser_files[i].path, w-5);
         rst();
     }
-    box_bot(top+h-1, 1, w);
+    box_bot(top+h-1, sx, w);
 }
 
 static Color get_token_color(const char *tok, bool is_comment){
@@ -1829,7 +1869,7 @@ static void draw_editor(int top, int rx, int rw, int h){
     bool act = (G.focus == FOCUS_EDITOR);
     char title[512];
     snprintf(title, sizeof(title), "Editor: %s%s", G.editor.filename[0]?G.editor.filename:"(new file)", G.editor.modified?"*":"");
-    box_top(top, rx, rw, title, act);
+    box_top(top, rx, rw, title, act, " [Save] ");
     box_sides(top, rx, rw, h);
     box_fill(top, rx, rw, h, TH->bg_base);
     int row = top+1, lim = top+h-1, vis = lim-row;
@@ -1854,15 +1894,21 @@ static void draw_editor(int top, int rx, int rw, int h){
             if(isspace(c) || ispunct(c) || c == '\0'){
                 if(bi > 0){
                     buf[bi] = '\0';
+                    bool selected = is_ed_selected(i, j - bi); /* approximation */
+                    if(selected) cbg(TH->bg_sel);
                     cfg(get_token_color(buf, in_comment && (strstr(line, "//") <= line + j - bi)));
                     at(row, cur_c - bi);
                     ppad(buf, bi);
+                    if(selected) cbg(TH->bg_base);
                     bi = 0;
                 }
                 if(c != '\0'){
                     at(row, cur_c);
+                    bool selected = is_ed_selected(i, j);
+                    if(selected) cbg(TH->bg_sel);
                     cfg(TH->fg_dim);
                     char cs[2] = {c, 0}; put_cell(row, cur_c, cs);
+                    if(selected) cbg(TH->bg_base);
                     cur_c++;
                 }
             } else {
@@ -1885,11 +1931,41 @@ static void draw_editor(int top, int rx, int rw, int h){
     box_bot(top+h-1, rx, rw);
 }
 
+static void draw_sidebar(void){
+    int h = G.rows - 2;
+    int top = 2;
+    cfg(TH->fg_dim); cbg(TH->bg_panel);
+    for(int r=top; r<top+h; r++){
+        at(r, 1); ppad(" ", G.sidebar_w);
+    }
+    
+    /* Explorer Icon (File Browser) */
+    at(top+1, 1);
+    bool explorer_act = G.browser_active;
+    if(explorer_act){ cfg(TH->fg_bright); G.cur_bold=true; } else cfg(TH->fg_dim);
+    ppad(" EXP", 4);
+    
+    /* Source Control Icon (Git) */
+    at(top+3, 1);
+    bool git_act = !G.browser_active;
+    if(git_act){ cfg(TH->fg_bright); G.cur_bold=true; } else cfg(TH->fg_dim);
+    ppad(" SRC", 4);
+    
+    rst();
+    /* Divider */
+    cfg(TH->fg_dim);
+    for(int r=top; r<top+h; r++){
+        at(r, G.sidebar_w); put_cell(r, G.sidebar_w, "│");
+    }
+    rst();
+}
+
 static void draw(void){
     layout();
     buf_clear(&G.back);
     rst();
     draw_tabbar();
+    draw_sidebar();
 
     int ct=2, ch=G.rows-2;
     switch(G.current_view){
@@ -2214,6 +2290,11 @@ static void handle_mouse(MouseEvt m){
             }
             return;
         }
+        if(G.ed_selecting){
+            G.ed_sel_end_y = G.editor.scroll_y + (m.row - (ct+1));
+            G.ed_sel_end_x = m.col - (G.rx + 7) + G.editor.scroll_x;
+            return;
+        }
         if(G.selecting){
             G.sel_end_y = G.diff_scroll + (m.row - (ct+1));
             G.sel_end_x = m.col - G.rx - 1;
@@ -2230,6 +2311,25 @@ static void handle_mouse(MouseEvt m){
         return;
     }
 
+    if(cl && m.col < G.sidebar_w){
+        if(m.row == ct+1){ G.browser_active = true; load_browser("."); G.focus = FOCUS_BROWSER; }
+        else if(m.row == ct+3){ G.browser_active = false; G.focus = FOCUS_CHANGES; }
+        return;
+    }
+
+    /* Right pane toggles */
+    if(cl && m.row == ct && m.col > G.rx){
+        if(!G.editor_active){
+            int unify_x = G.cols - 15;
+            int hunk_x = G.cols - 7;
+            if(m.col >= unify_x && m.col < unify_x + 7){ G.diff_sidebyside = !G.diff_sidebyside; return; }
+            if(m.col >= hunk_x && m.col < hunk_x + 6){ G.diff_continuous = !G.diff_continuous; update_diff(); return; }
+        } else {
+            int save_x = G.cols - 8;
+            if(m.col >= save_x && m.col < save_x + 6){ editor_save(); return; }
+        }
+    }
+
     if(cl && m.row==1){
         /* ... */
         if(m.col>=G.tab_x[0] && m.col<G.tab_x[1]) G.current_view=VIEW_STATUS;
@@ -2241,11 +2341,18 @@ static void handle_mouse(MouseEvt m){
         return;
     }
     if(cl && G.current_view == VIEW_STATUS && m.col > G.lw && m.row > ct && m.row < G.rows-1){
-        G.selecting = true;
-        G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (ct+1));
-        G.sel_start_x = G.sel_end_x = m.col - G.rx - 1;
+        if(G.editor_active){
+            G.ed_selecting = true;
+            G.ed_sel_start_y = G.ed_sel_end_y = G.editor.scroll_y + (m.row - (ct+1));
+            G.ed_sel_start_x = G.ed_sel_end_x = m.col - (G.rx + 7) + G.editor.scroll_x;
+        } else {
+            G.selecting = true;
+            G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (ct+1));
+            G.sel_start_x = G.sel_end_x = m.col - G.rx - 1;
+        }
     } else if(cl){
         G.selecting = false;
+        G.ed_selecting = false;
     }
 
     if(cl && m.row==G.rows-1){
@@ -2523,6 +2630,35 @@ static void editor_paste(void){
     }
 }
 
+static void action_copy_editor_selection(void){
+    if(!G.ed_selecting) return;
+    int sy = G.ed_sel_start_y, sx = G.ed_sel_start_x;
+    int ey = G.ed_sel_end_y, ex = G.ed_sel_end_x;
+    if(sy > ey || (sy == ey && sx > ex)){
+        int t=sy; sy=ey; ey=t; t=sx; sx=ex; ex=t;
+    }
+    if(G.clipboard) free(G.clipboard);
+    size_t cap = 1024, len = 0;
+    G.clipboard = malloc(cap);
+    for(int y = sy; y <= ey; y++){
+        if(y < 0 || y >= G.editor.line_count) continue;
+        const char *line = G.editor.lines[y];
+        int line_len = (int)strlen(line);
+        int start_x = (y == sy) ? sx : 0;
+        int end_x = (y == ey) ? ex : line_len - 1;
+        for(int x = start_x; x <= end_x && x < line_len; x++){
+            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+            G.clipboard[len++] = line[x];
+        }
+        if(y < ey){
+            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+            G.clipboard[len++] = '\n';
+        }
+    }
+    G.clipboard[len] = '\0';
+    OK("Copied %d chars from editor", (int)len);
+}
+
 /* ================================================================
    MAIN KEY HANDLER
 ================================================================ */
@@ -2604,7 +2740,10 @@ static void handle_key(Key k){
         case 'A':action_amend();return;
         case 'P':action_push();return;
         case 'f':action_pull();return;
-        case 'y':if(G.selecting) action_copy_selection(); return;
+        case 'y':
+            if(G.ed_selecting) action_copy_editor_selection();
+            else if(G.selecting) action_copy_selection();
+            return;
         case 'e':
             if(G.current_view == VIEW_STATUS){
                 if(G.focus == FOCUS_CHANGES && G.file_count > 0){
@@ -2657,7 +2796,12 @@ static void handle_key(Key k){
                  return;
         }
     }
-    if(k.type==KEY_CTRL_C) { action_commit(); return; }
+    if(k.type==KEY_CTRL_C) { 
+        if(G.ed_selecting) action_copy_editor_selection();
+        else if(G.selecting) action_copy_selection();
+        else action_commit(); 
+        return; 
+    }
     if(k.type==KEY_CTRL_R || k.type==KEY_CTRL_L) { reload_all(); return; }
     if(k.type==KEY_CTRL_P) { action_push(); return; }
     if(k.type==KEY_CTRL_F) { action_pull(); return; }
