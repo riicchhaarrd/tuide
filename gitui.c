@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.5.1"
+#define VERSION        "2.5.2"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -910,6 +910,7 @@ static void draw_statusbar(void){
    CHANGES PANE
 ================================================================ */
 static void draw_changes(int top,int h){
+    if(h<=2) return;
     int w=G.lw;
     bool act=(G.focus==FOCUS_CHANGES&&G.current_view==VIEW_STATUS);
     box_top(top,1,w,"Changes",act);
@@ -981,6 +982,7 @@ static void draw_changes(int top,int h){
    GRAPH PANE
 ================================================================ */
 static void draw_graph(int top,int h){
+    if(h<=2) return;
     int w=G.lw;
     bool act=(G.focus==FOCUS_GRAPH&&G.current_view==VIEW_STATUS);
     box_top(top,1,w,"Graph",act);
@@ -989,6 +991,7 @@ static void draw_graph(int top,int h){
 
     int row=top+1,lim=top+h-1,iw=w-2;
     int vis=lim-row;
+    if(vis<=0) { box_bot(top+h-1,1,w); return; }
 
     if(G.commit_sel<G.commit_scroll)G.commit_scroll=G.commit_sel;
     if(G.commit_sel>=G.commit_scroll+vis)G.commit_scroll=G.commit_sel-vis+1;
@@ -1043,6 +1046,7 @@ static void draw_graph(int top,int h){
    DIFF PANE (side-by-side + unified)
 ================================================================ */
 static void draw_diff(int top,int rx,int rw,int h){
+    if(h<=2) return;
     bool act=(G.focus==FOCUS_DIFF);
     char title[128];
     if(G.diff_title[0])snprintf(title,sizeof(title),"%.60s%s",G.diff_title,G.diff_staged?" [staged]":"");
@@ -1421,8 +1425,8 @@ static void draw(void){
     int ct=2, ch=G.rows-2;
     switch(G.current_view){
     case VIEW_STATUS:
-        draw_changes(ct, G.lh_chg);
-        draw_graph(ct+G.lh_chg, G.lh_gph);
+        if(G.lh_chg > 2) draw_changes(ct, G.lh_chg);
+        if(G.lh_gph > 2) draw_graph(ct+G.lh_chg, G.lh_gph);
         draw_diff(ct, G.rx, G.rw, ch);
         break;
     case VIEW_LOG:{
