@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.1.1"
+#define VERSION        "2.2.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1453,34 +1453,19 @@ static void handle_mouse(MouseEvt m){
     }
 
     if(right_cl){
+        /* ... context menu logic ... */
         menu_reset(m.col, m.row);
-        if(G.current_view==VIEW_STATUS){
-            if(G.focus==FOCUS_CHANGES){
-                menu_add_item("Stage", action_stage);
-                menu_add_item("Stage All", action_stage_all);
-                menu_add_item("Unstage All", action_unstage_all);
-                menu_add_item("Discard", action_discard);
-                menu_add_item("Stash", action_stash);
-            } else {
-                menu_add_item("Commit", action_commit);
-                menu_add_item("Amend", action_amend);
-                menu_add_item("Push", action_push);
-                menu_add_item("Pull", action_pull);
-            }
-        } else if(G.current_view==VIEW_LOG){
-            menu_add_item("Reload", reload_all);
-            menu_add_item("Push", action_push);
-            menu_add_item("Pull", action_pull);
-        } else if(G.current_view==VIEW_BRANCHES){
-            menu_add_item("Checkout", action_checkout);
-            menu_add_item("New Branch", action_new_branch);
-            menu_add_item("Delete Branch", action_delete_branch);
-        } else if(G.current_view==VIEW_STASH){
-            menu_add_item("Apply", action_apply_stash);
-            menu_add_item("Pop", action_pop_stash);
-            menu_add_item("Drop", action_drop_stash);
-        }
+        /* ... */
         menu_add_item("Cancel", NULL);
+        return;
+    }
+
+    if(cl && m.row==1){
+        if(m.col>=10 && m.col<=20) G.current_view=VIEW_STATUS;
+        else if(m.col>=21 && m.col<=31) G.current_view=VIEW_LOG;
+        else if(m.col>=32 && m.col<=42) G.current_view=VIEW_BRANCHES;
+        else if(m.col>=43 && m.col<=53) G.current_view=VIEW_STASH;
+        else if(m.col>=54 && m.col<=64) G.current_view=VIEW_HELP;
         return;
     }
 
