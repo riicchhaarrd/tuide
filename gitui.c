@@ -38,7 +38,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.14.0"
+#define VERSION        "2.15.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -282,7 +282,9 @@ typedef struct {
     int lw, lh_chg, lh_gph, rx, rw;
     int lw_custom, lh_chg_custom;
     bool dragging_v, dragging_h, dragging_sc, dragging_diff;
-    int  sc_y, sc_h, sc_total, sc_vis;
+    bool dragging_col_hash, dragging_col_author, dragging_col_date;
+    int  col_hash_w, col_author_w, col_date_w;
+    int  sc_y, sc_h, sc_total, sc_vis, sc_drag_offset;
     int  tab_x[7];
 
     /* Context Menu */
@@ -945,20 +947,23 @@ static void draw_cli(void){
 static void draw_dividers(void){
     if(G.current_view != VIEW_STATUS) return;
     int ct=2;
+    int vx = G.sidebar_w + G.lw;
     /* Vertical divider */
-    if(G.lw >= 1 && G.lw <= G.cols){
+    if(vx >= 1 && vx <= G.cols){
         for(int r=ct; r<G.rows-1; r++){
-            at(r, G.lw);
-            bool hover = (G.last_mx == G.lw && G.last_my == r);
-            if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, G.lw, "┃");}
-            else {cfg(TH->fg_dim); put_cell(r, G.lw, "│");}
+            at(r, vx);
+            bool hover = (G.last_mx == vx && G.last_my == r);
+            if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, vx, "┃");}
+            else {cfg(TH->fg_dim); put_cell(r, vx, "│");}
             rst();
         }
     }
     /* Horizontal divider */
+    if(G.browser_active) return;
     int hr = ct + G.lh_chg - 1;
+    int hstart = G.sidebar_w + 1;
     if(hr >= 1 && hr < G.rows){
-        for(int c=1; c<G.lw; c++){
+        for(int c=hstart; c<vx; c++){
             at(hr, c);
             bool hover = (G.last_my == hr && G.last_mx == c);
             if(G.dragging_h || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(hr, c, "━");}
@@ -1515,6 +1520,31 @@ static void draw_log(int top,int h){
     if(G.commit_sel<G.commit_scroll)G.commit_scroll=G.commit_sel;
     if(G.commit_sel>=G.commit_scroll+vis)G.commit_scroll=G.commit_sel-vis+1;
 
+    /* Header */
+    at(row, 2); cbg(TH->bg_header); cfg(TH->fg_accent3); G.cur_bold=true;
+    int cur_x = 2;
+    ppad("Graph", GRAPH_COLS); cur_x += GRAPH_COLS;
+    
+    int hx = cur_x + G.col_hash_w;
+    ppad("Hash", G.col_hash_w);
+    at(row, hx); if(G.dragging_col_hash) cfg(TH->fg_accent1); else cfg(TH->fg_dim); put_cell(row, hx, "│"); cur_x = hx + 1;
+    
+    cfg(TH->fg_accent3);
+    ppad("Refs", 21); cur_x += 21;
+    
+    int ax = cur_x + G.col_author_w;
+    ppad("Author", G.col_author_w);
+    at(row, ax); if(G.dragging_col_author) cfg(TH->fg_accent1); else cfg(TH->fg_dim); put_cell(row, ax, "│"); cur_x = ax + 1;
+    
+    cfg(TH->fg_accent3);
+    int dx = cur_x + G.col_date_w;
+    ppad("Date", G.col_date_w);
+    at(row, dx); if(G.dragging_col_date) cfg(TH->fg_accent1); else cfg(TH->fg_dim); put_cell(row, dx, "│"); cur_x = dx + 1;
+    
+    cfg(TH->fg_accent3);
+    ppad("Subject", w - cur_x - 1);
+    rst(); row++; vis--;
+
     for(int i=G.commit_scroll;i<G.commit_count&&row<lim;i++,row++){
         GitCommit *c=&G.commits[i];
         bool sel=(G.commit_sel==i);
@@ -1534,9 +1564,15 @@ static void draw_log(int top,int h){
         }
         while(gc<GRAPH_COLS){at(row, 2+gc); put_cell(row,2+gc," ");gc++;}
 
-        at(row, 2+GRAPH_COLS);
-        cfg(sel?TH->fg_sel:TH->fg_accent1);G.cur_bold=true; char hbuf[16]; snprintf(hbuf,sizeof(hbuf),"%.8s ",c->hash); ppad(hbuf, 9); rst();
+        cur_x = 2 + GRAPH_COLS;
+        at(row, cur_x);
+        cfg(sel?TH->fg_sel:TH->fg_accent1);G.cur_bold=true; 
+        char hbuf[64]; snprintf(hbuf,sizeof(hbuf),"%.*s", G.col_hash_w-1, c->hash); 
+        ppad(hbuf, G.col_hash_w); rst();
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_base);
+        at(row, cur_x + G.col_hash_w); put_cell(row, cur_x + G.col_hash_w, "│");
+        cur_x += G.col_hash_w + 1;
+
         if(c->refs[0]){
             cfg(sel?TH->fg_sel:TH->fg_ref_local);
             char rf[32];snprintf(rf,sizeof(rf),"(%.18s) ",c->refs);
@@ -1544,10 +1580,17 @@ static void draw_log(int top,int h){
         } else {
             ppad("", 21);
         }
-        cfg(sel?TH->fg_sel:TH->fg_accent2); ppad(c->author,14); ppad(" ", 1);
-        cfg(sel?TH->fg_sel:TH->fg_accent3); ppad(c->date, 13); ppad(" ", 1);
-        int used=GRAPH_COLS+10+21+14+15;
-        int sw=w-3-used;
+        cur_x += 21;
+        
+        cfg(sel?TH->fg_sel:TH->fg_accent2); ppad(c->author, G.col_author_w); 
+        at(row, cur_x + G.col_author_w); put_cell(row, cur_x + G.col_author_w, "│");
+        cur_x += G.col_author_w + 1;
+
+        cfg(sel?TH->fg_sel:TH->fg_accent3); ppad(c->date, G.col_date_w); 
+        at(row, cur_x + G.col_date_w); put_cell(row, cur_x + G.col_date_w, "│");
+        cur_x += G.col_date_w + 1;
+
+        int sw=w-cur_x-1;
         if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
         rst();
     }
@@ -2248,7 +2291,10 @@ static void handle_mouse(MouseEvt m){
     bool right_cl=cl && (m.btn&3)==2;
     int ct=2;
 
-    if(m.release){G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false; G.dragging_diff=false;}
+    if(m.release){
+        G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false; G.dragging_diff=false;
+        G.dragging_col_hash=false; G.dragging_col_author=false; G.dragging_col_date=false;
+    }
 
     if(G.menu_active){
         /* ... */
@@ -2268,18 +2314,32 @@ static void handle_mouse(MouseEvt m){
     }
 
     if(motion){
-        if(G.dragging_v){G.lw_custom=m.col; layout(); return;}
+        if(G.dragging_v){G.lw_custom=m.col - G.sidebar_w; layout(); return;}
         if(G.dragging_h){G.lh_chg_custom=m.row-ct+1; layout(); return;}
         if(G.dragging_diff){G.diff_split_custom=m.col-G.rx; layout(); return;}
         if(G.dragging_sc && G.sc_h > 0){
-            /* ... (existing scrollbar dragging) ... */
             int rel_y = m.row - G.sc_y;
             int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
             int max_bpos = G.sc_h - bh;
             if(max_bpos > 0){
-                int bpos = iclamp(rel_y - bh/2, 0, max_bpos);
+                int bpos = iclamp(rel_y - G.sc_drag_offset, 0, max_bpos);
                 G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
             }
+            return;
+        }
+        if(G.dragging_col_hash){
+            int start_x = 2 + GRAPH_COLS;
+            G.col_hash_w = imax(4, m.col - start_x);
+            return;
+        }
+        if(G.dragging_col_author){
+            int start_x = 2 + GRAPH_COLS + G.col_hash_w + 1 + 21;
+            G.col_author_w = imax(4, m.col - start_x);
+            return;
+        }
+        if(G.dragging_col_date){
+            int start_x = 2 + GRAPH_COLS + G.col_hash_w + 1 + 21 + G.col_author_w + 1;
+            G.col_date_w = imax(4, m.col - start_x);
             return;
         }
         if(G.ed_selecting){
@@ -2354,38 +2414,54 @@ static void handle_mouse(MouseEvt m){
 
     if(G.current_view==VIEW_STATUS){
         layout();
-        if(cl && m.col==G.lw){G.dragging_v=true; return;}
-        if(cl && m.col<G.lw && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
+        int vx = G.sidebar_w + G.lw;
+        if(cl && m.col==vx){G.dragging_v=true; return;}
+        if(cl && m.col<vx && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
         if(cl && G.diff_sidebyside && m.col==G.rx+G.diff_split){G.dragging_diff=true; return;}
+        
+        if(cl && G.focus == FOCUS_GRAPH){
+            int cur_x = 2 + GRAPH_COLS;
+            if(m.col == cur_x + G.col_hash_w) { G.dragging_col_hash = true; return; }
+            cur_x += G.col_hash_w + 1 + 21;
+            if(m.col == cur_x + G.col_author_w) { G.dragging_col_author = true; return; }
+            cur_x += G.col_author_w + 1;
+            if(m.col == cur_x + G.col_date_w) { G.dragging_col_date = true; return; }
+        }
+
         if(cl && m.col >= G.cols-2 && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
-            G.dragging_sc = true;
-            int rel_y = m.row - G.sc_y;
             int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
-            int max_bpos = G.sc_h - bh;
-            if(max_bpos > 0){
-                int bpos = iclamp(rel_y - bh/2, 0, max_bpos);
-                G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+            int bpos = (G.sc_total > G.sc_vis) ? ((G.diff_scroll * (G.sc_h - bh)) / (G.sc_total - G.sc_vis)) : 0;
+            if(m.row >= G.sc_y + bpos && m.row < G.sc_y + bpos + bh){
+                G.dragging_sc = true;
+                G.sc_drag_offset = m.row - (G.sc_y + bpos);
+            } else {
+                int max_bpos = G.sc_h - bh;
+                if(max_bpos > 0){
+                    int target_bpos = iclamp(m.row - G.sc_y - bh/2, 0, max_bpos);
+                    G.diff_scroll = (target_bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+                    G.dragging_sc = true;
+                    G.sc_drag_offset = bh / 2;
+                }
             }
             return;
         }
 
-        bool in_l=(m.col>=1&&m.col<=G.lw);
-        bool in_r=(m.col>G.lw);
+        bool in_l=(m.col>=1&&m.col<=vx);
+        bool in_r=(m.col>vx);
         bool in_top=(m.row>=ct&&m.row<ct+G.lh_chg);
         bool in_bot=(m.row>=ct+G.lh_chg);
 
         if(in_l&&in_top){
             if(cl)G.focus=FOCUS_CHANGES;
-            if(su)G.file_sel=imax(0,G.file_sel-1);
-            if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+1);
+            if(su)G.file_sel=imax(0,G.file_sel-3);
+            if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+3);
             if(cl){
                 int row=m.row-(ct+1);
-                int vis=0; /* row 0 is Staged header */
+                int vis=0;
                 for(int i=0;i<G.file_count;i++){
                     if(G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
                 }
-                vis++; /* spacer */
-                vis++; /* Unstaged header */
+                vis++; vis++;
                 for(int i=0;i<G.file_count;i++){
                     if(!G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
                 }
@@ -2394,8 +2470,8 @@ static void handle_mouse(MouseEvt m){
         } else if(in_l&&in_bot){
             if(cl)G.focus=FOCUS_GRAPH;
             int gvis=G.lh_gph-2;
-            if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,gvis);
-            if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,gvis);
+            if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-3,gvis);
+            if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,3,gvis);
             if(cl){
                 int row_idx = m.row - (ct + G.lh_chg + 1);
                 if(row_idx >= 0 && row_idx < G.graph_rows_count){
@@ -2412,7 +2488,6 @@ static void handle_mouse(MouseEvt m){
                             G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
                         }
                     } else {
-                        /* Clicked on a file under a commit */
                         G.graph_file_sel = fi;
                         if(fi == 0) {
                             snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
@@ -2448,27 +2523,43 @@ static void handle_mouse(MouseEvt m){
                     }
                 }
             }
-            if(su)G.diff_scroll=imax(0,G.diff_scroll-1);
-            if(sd)G.diff_scroll+=1;
+            if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
+            if(sd)G.diff_scroll+=3;
         }
     } else if(G.current_view==VIEW_LOG){
         int lh=(G.rows-2)*55/100;
         bool in_log=(m.row<ct+lh);
         int vis=lh-2;
+        
+        if(cl){
+            int cur_x = 2 + GRAPH_COLS;
+            if(m.col == cur_x + G.col_hash_w) { G.dragging_col_hash = true; return; }
+            cur_x += G.col_hash_w + 1 + 21;
+            if(m.col == cur_x + G.col_author_w) { G.dragging_col_author = true; return; }
+            cur_x += G.col_author_w + 1;
+            if(m.col == cur_x + G.col_date_w) { G.dragging_col_date = true; return; }
+        }
+
         if(cl && m.col >= G.cols-2 && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
-            G.dragging_sc = true;
-            int rel_y = m.row - G.sc_y;
             int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
-            int max_bpos = G.sc_h - bh;
-            if(max_bpos > 0){
-                int bpos = iclamp(rel_y - bh/2, 0, max_bpos);
-                G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+            int bpos = (G.sc_total > G.sc_vis) ? ((G.diff_scroll * (G.sc_h - bh)) / (G.sc_total - G.sc_vis)) : 0;
+            if(m.row >= G.sc_y + bpos && m.row < G.sc_y + bpos + bh){
+                G.dragging_sc = true;
+                G.sc_drag_offset = m.row - (G.sc_y + bpos);
+            } else {
+                int max_bpos = G.sc_h - bh;
+                if(max_bpos > 0){
+                    int target_bpos = iclamp(m.row - G.sc_y - bh/2, 0, max_bpos);
+                    G.diff_scroll = (target_bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+                    G.dragging_sc = true;
+                    G.sc_drag_offset = bh / 2;
+                }
             }
             return;
         }
         if(in_log){
-            if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis);
-            if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis);
+            if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-3,vis);
+            if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,3,vis);
             if(cl || su || sd){
                 int t = (cl) ? (G.commit_scroll+(m.row-ct-1)) : G.commit_sel;
                 if(t>=0&&t<G.commit_count){
@@ -2478,23 +2569,23 @@ static void handle_mouse(MouseEvt m){
                 }
             }
         } else {
-            if(su)G.diff_scroll=imax(0,G.diff_scroll-1);
-            if(sd)G.diff_scroll+=1;
+            if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
+            if(sd)G.diff_scroll+=3;
         }
     } else if(G.current_view==VIEW_BRANCHES){
         int vis=G.rows-4;
-        if(su)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,-1,vis);
-        if(sd)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,1,vis);
+        if(su)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,-3,vis);
+        if(sd)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,3,vis);
         if(cl){int t=G.branch_scroll+(m.row-ct-2);if(t>=0&&t<G.branch_count)G.branch_sel=t;}
     } else if(G.current_view==VIEW_STASH){
-        if(su)G.stash_sel=imax(0,G.stash_sel-1);
-        if(sd)G.stash_sel=imin(G.stash_count>0?G.stash_count-1:0,G.stash_sel+1);
+        if(su)G.stash_sel=imax(0,G.stash_sel-3);
+        if(sd)G.stash_sel=imin(G.stash_count>0?G.stash_count-1:0,G.stash_sel+3);
         if(cl){int t=m.row-ct-1;if(t>=0&&t<G.stash_count)G.stash_sel=t;}
     } else if(G.current_view==VIEW_EDITOR){
         if(m.col <= G.lw){
             if(cl) G.focus=FOCUS_BROWSER;
-            if(su) G.browser_sel=imax(0, G.browser_sel-1);
-            if(sd) G.browser_sel=imin(G.browser_count>0?G.browser_count-1:0, G.browser_sel+1);
+            if(su) G.browser_sel=imax(0, G.browser_sel-3);
+            if(sd) G.browser_sel=imin(G.browser_count>0?G.browser_count-1:0, G.browser_sel+3);
             if(cl){
                 int t = G.browser_scroll + (m.row - (ct+1));
                 if(t >= 0 && t < G.browser_count){
@@ -2511,8 +2602,8 @@ static void handle_mouse(MouseEvt m){
             }
         } else {
             if(cl) G.focus=FOCUS_EDITOR;
-            if(su) G.editor.cur_y=imax(0, G.editor.cur_y-1);
-            if(sd) G.editor.cur_y=imin(G.editor.line_count>0?G.editor.line_count-1:0, G.editor.cur_y+1);
+            if(su) G.editor.cur_y=imax(0, G.editor.cur_y-3);
+            if(sd) G.editor.cur_y=imin(G.editor.line_count>0?G.editor.line_count-1:0, G.editor.cur_y+3);
             if(cl){
                 int ty = G.editor.scroll_y + (m.row - (ct+1));
                 if(ty >= 0 && ty < G.editor.line_count){
@@ -3241,6 +3332,7 @@ int main(int argc, char **argv){
     G.running=true; G.current_view=VIEW_STATUS; G.focus=FOCUS_CHANGES;
     G.theme_idx=0;
     G.clipboard=NULL;
+    G.col_hash_w = 9; G.col_author_w = 14; G.col_date_w = 13;
     G.editor_active=false; G.browser_active=false;
     G.diff_sidebyside=true; G.diff_continuous=false;
 
