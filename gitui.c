@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.2.1"
+#define VERSION        "2.3.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -227,6 +227,8 @@ typedef struct {
 
     /* Layout */
     int lw, lh_chg, lh_gph, rx, rw;
+    int lw_custom, lh_chg_custom;
+    bool dragging_v, dragging_h;
 
     /* Context Menu */
     bool menu_active;
@@ -315,10 +317,15 @@ static void ppad(const char *s,int w){
    LAYOUT
 ================================================================ */
 static void layout(void){
-    G.lw=imax(26,imin(48,G.cols*32/100));
+    if(G.lw_custom > 0) G.lw = iclamp(G.lw_custom, 20, G.cols-20);
+    else G.lw=imax(26,imin(48,G.cols*32/100));
+    
     G.rx=G.lw+1; G.rw=G.cols-G.lw;
     int ch=G.rows-2;
-    G.lh_chg=imax(5,ch*58/100);
+    
+    if(G.lh_chg_custom > 0) G.lh_chg = iclamp(G.lh_chg_custom, 4, ch-4);
+    else G.lh_chg=imax(5,ch*58/100);
+    
     G.lh_gph=ch-G.lh_chg;
     if(G.lh_gph<4){G.lh_gph=4;G.lh_chg=ch-4;}
 }
@@ -641,6 +648,25 @@ static void draw_menu(void){
 /* ================================================================
    TAB BAR
 ================================================================ */
+static void draw_dividers(void){
+    if(G.current_view != VIEW_STATUS) return;
+    int ct=2;
+    /* Vertical divider */
+    for(int r=ct; r<G.rows-1; r++){
+        at(r, G.lw);
+        bool hover = (G.last_mx == G.lw && G.last_my == r);
+        if(G.dragging_v || hover){cfg(TH->fg_accent1); printf(T_BOLD "┃"); rst();}
+        else {cfg(TH->fg_dim); printf("│"); rst();}
+    }
+    /* Horizontal divider */
+    for(int c=1; c<G.lw; c++){
+        at(ct+G.lh_chg-1, c);
+        bool hover = (G.last_my == ct+G.lh_chg-1 && G.last_mx == c);
+        if(G.dragging_h || hover){cfg(TH->fg_accent1); printf(T_BOLD "━"); rst();}
+        else {cfg(TH->fg_dim); printf("─"); rst();}
+    }
+}
+
 static void draw_tabbar(void){
     at(1,1); cbg(TH->bg_tab_inact); cfg(TH->fg_accent2); printf(T_BOLD);
     printf(" ⎇ gitui "); rst();
@@ -1183,6 +1209,7 @@ static void draw(void){
     }
     draw_statusbar();
     draw_prompt_overlay();
+    draw_dividers();
     draw_menu();
     printf(T_SHOW);
     fflush(stdout);
@@ -1432,9 +1459,12 @@ static void handle_mouse(MouseEvt m){
     G.last_mx=m.col; G.last_my=m.row;
     bool su=(m.btn&64)&&!(m.btn&1);
     bool sd=(m.btn&64)&&(m.btn&1);
-    bool cl=!su&&!sd&&!m.release&&(m.btn&3)!=3 && !(m.btn&32);
+    bool motion=(m.btn&32)!=0;
+    bool cl=!su&&!sd&&!m.release&&(m.btn&3)!=3 && !motion;
     bool right_cl=cl && (m.btn&3)==2;
     int ct=2;
+
+    if(m.release){G.dragging_v=false; G.dragging_h=false;}
 
     if(G.menu_active){
         if(cl){
@@ -1452,10 +1482,40 @@ static void handle_mouse(MouseEvt m){
         return;
     }
 
+    if(motion){
+        if(G.dragging_v){G.lw_custom=m.col; layout(); return;}
+        if(G.dragging_h){G.lh_chg_custom=m.row-ct+1; layout(); return;}
+        return;
+    }
+
     if(right_cl){
-        /* ... context menu logic ... */
         menu_reset(m.col, m.row);
-        /* ... */
+        if(G.current_view==VIEW_STATUS){
+            if(G.focus==FOCUS_CHANGES){
+                menu_add_item("Stage", action_stage);
+                menu_add_item("Stage All", action_stage_all);
+                menu_add_item("Unstage All", action_unstage_all);
+                menu_add_item("Discard", action_discard);
+                menu_add_item("Stash", action_stash);
+            } else {
+                menu_add_item("Commit", action_commit);
+                menu_add_item("Amend", action_amend);
+                menu_add_item("Push", action_push);
+                menu_add_item("Pull", action_pull);
+            }
+        } else if(G.current_view==VIEW_LOG){
+            menu_add_item("Reload", reload_all);
+            menu_add_item("Push", action_push);
+            menu_add_item("Pull", action_pull);
+        } else if(G.current_view==VIEW_BRANCHES){
+            menu_add_item("Checkout", action_checkout);
+            menu_add_item("New Branch", action_new_branch);
+            menu_add_item("Delete Branch", action_delete_branch);
+        } else if(G.current_view==VIEW_STASH){
+            menu_add_item("Apply", action_apply_stash);
+            menu_add_item("Pop", action_pop_stash);
+            menu_add_item("Drop", action_drop_stash);
+        }
         menu_add_item("Cancel", NULL);
         return;
     }
@@ -1471,6 +1531,9 @@ static void handle_mouse(MouseEvt m){
 
     if(G.current_view==VIEW_STATUS){
         layout();
+        if(cl && m.col==G.lw){G.dragging_v=true; return;}
+        if(cl && m.col<G.lw && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
+
         bool in_l=(m.col>=1&&m.col<=G.lw);
         bool in_r=(m.col>G.lw);
         bool in_top=(m.row>=ct&&m.row<ct+G.lh_chg);
