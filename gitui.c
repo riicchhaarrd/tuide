@@ -35,12 +35,12 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.10.1"
+#define VERSION        "2.12.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
 #define MAX_STASHES    64
-#define MAX_DIFF_LINES 8192
+#define MAX_DIFF_LINES 16384
 #define LINE_MAX_LEN   512
 #define INPUT_MAX      512
 #define GRAPH_COLS     8
@@ -225,7 +225,7 @@ typedef struct {
     DiffLine diff_lines[MAX_DIFF_LINES];
     int diff_count, diff_scroll, diff_hscroll;
     char diff_title[512], diff_commit[16];
-    bool diff_staged, diff_sidebyside, diff_is_summary;
+    bool diff_staged, diff_sidebyside, diff_is_summary, diff_continuous;
     int  diff_sel;
 
     /* Branches */
@@ -655,46 +655,66 @@ static void parse_diff(const char *raw){
     while(*line&&G.diff_count<MAX_DIFF_LINES){
         const char *nl=strchr(line,'\n');
         size_t len=nl?(size_t)(nl-line):strlen(line);
-        DiffLine *dl=&G.diff_lines[G.diff_count]; memset(dl,0,sizeof(*dl));
         char lb[LINE_MAX_LEN]; if(len>=LINE_MAX_LEN)len=LINE_MAX_LEN-1;
         memcpy(lb,line,len); lb[len]='\0';
         
-        /* Skip git metadata headers for a cleaner view */
-        if(strncmp(lb, "diff --git", 10) == 0 || strncmp(lb, "index ", 6) == 0 ||
-           strncmp(lb, "new file mode", 13) == 0 || strncmp(lb, "deleted file mode", 17) == 0 ||
-           strncmp(lb, "rename from", 11) == 0 || strncmp(lb, "rename to", 9) == 0 ||
-           strncmp(lb, "similarity index", 16) == 0 ||
-           strncmp(lb, "--- ", 4) == 0 || strncmp(lb, "+++ ", 4) == 0){
-            line=nl?nl+1:line+len; continue;
+        /* Identify line type by prefix - efficient lb[0] dispatch */
+        int type = -1;
+        if(lb[0] == '+') {
+            if(lb[1] == '+' && lb[2] == '+') type = 4; /* File header (+++) */
+            else type = 1; /* Added */
+        } else if(lb[0] == '-') {
+            if(lb[1] == '-' && lb[2] == '-') type = 4; /* File header (---) */
+            else type = 2; /* Deleted */
+        } else if(lb[0] == '@' && lb[1] == '@') {
+            type = 3; /* Hunk header */
+        } else if(lb[0] == 'd' && strncmp(lb, "diff --git ", 11) == 0) {
+            type = 4; /* File header (diff --git) */
+        } else if(lb[0] == ' ' || lb[0] == '\0') {
+            type = 0; /* Context */
+        } else {
+            type = 6; /* Metadata (index, mode, etc.) */
         }
 
-        if(lb[0]=='+'&&lb[1]=='+'&&lb[2]=='+'){
-            dl->type=4; snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
-        } else if(lb[0]=='-'&&lb[1]=='-'&&lb[2]=='-'){
-            dl->type=4; snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb);
-        } else if(lb[0]=='@'){
-            dl->type=3;
-            snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
-            snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb);
+        /* Filtering: move logic from draw_diff to parse_diff for correct scrolling */
+        bool skip = false;
+        if(type == 4) {
+            /* Always skip ---/+++ lines in individual file views as they are redundant */
+            if(lb[0] == '+' || lb[0] == '-') skip = true;
+        }
+        /* No longer skipping anything else to keep the view continuous and matching 1:1 */
+
+        if(skip) { line=nl?nl+1:line+len; continue; }
+
+        /* Handle hunk header line numbers */
+        if(type == 3){
             int om=0,nm=0;
             sscanf(lb,"@@ -%d",&om);
             sscanf(lb,"@@ -%*d,%*d +%d",&nm);
             if(!om)sscanf(lb,"@@ -%d,",&om);
             if(!nm)sscanf(lb,"@@ -%*d +%d",&nm);
             old_lno=om>0?om:1; new_lno=nm>0?nm:1;
-        } else if(lb[0]=='+'){
-            dl->type=1; dl->new_lno=new_lno++;
-            snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb+1);
-        } else if(lb[0]=='-'){
-            dl->type=2; dl->old_lno=old_lno++;
-            snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb+1);
+        }
+
+        DiffLine *dl=&G.diff_lines[G.diff_count]; memset(dl,0,sizeof(*dl));
+        dl->type = type;
+        if(type == 3){
+            snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
+            snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb);
+        } else if(type == 1){
+            dl->new_lno=new_lno++; snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb+1);
+        } else if(type == 2){
+            dl->old_lno=old_lno++; snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb+1);
+        } else if(type == 6){
+            snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
+            snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb);
         } else {
-            dl->type=0; dl->old_lno=old_lno++; dl->new_lno=new_lno++;
+            dl->old_lno=old_lno++; dl->new_lno=new_lno++;
             const char *src=(lb[0]==' ')?lb+1:lb;
             snprintf(dl->old_line,sizeof(dl->old_line),"%s",src);
             snprintf(dl->new_line,sizeof(dl->new_line),"%s",src);
         }
-        G.diff_count++; line=nl?nl+1:line+strlen(line);
+        G.diff_count++; line=nl?nl+1:line+len;
     }
     G.diff_scroll=0; G.diff_hscroll=0;
 }
@@ -723,8 +743,9 @@ static void load_diff_file(const char *path,bool staged){
     G.diff_is_summary=false;
     G.diff_commit[0]='\0';
     char cmd[1024];
-    if(staged)snprintf(cmd,sizeof(cmd),"git diff --cached -- '%s' 2>/dev/null",path);
-    else       snprintf(cmd,sizeof(cmd),"git diff -- '%s' 2>/dev/null",path);
+    const char *ctx = G.diff_continuous ? "-U1000" : "-U3";
+    if(staged)snprintf(cmd,sizeof(cmd),"git diff --cached %s -- '%s' 2>/dev/null",ctx,path);
+    else       snprintf(cmd,sizeof(cmd),"git diff %s -- '%s' 2>/dev/null",ctx,path);
     char *o=git_run(cmd);
     if(!o||!o[0]){
         free(o);
@@ -749,7 +770,9 @@ static void load_diff_file(const char *path,bool staged){
     parse_diff(o); free(o);
 }
 static void load_diff_commit(const char *hash){
-    char cmd[256]; snprintf(cmd,sizeof(cmd),"git show %s 2>/dev/null",hash);
+    char cmd[256]; 
+    const char *ctx = G.diff_continuous ? "-U1000" : "-U3";
+    snprintf(cmd,sizeof(cmd),"git show %s %s 2>/dev/null",ctx,hash);
     char *o=git_run(cmd); parse_diff(o?o:""); free(o);
 }
 static void update_diff(void){
@@ -1200,8 +1223,9 @@ static void draw_diff(int top,int rx,int rw,int h){
 
     bool ssb=G.diff_sidebyside;
     int lnum_w=4;
-    int half=(rw-2)/2;
-    int code_w=ssb?(half-lnum_w-2):(rw-2-lnum_w-2);
+    int content_w = rw - 6;
+    int half=content_w/2;
+    int code_w=ssb?(half-lnum_w-2):(content_w-lnum_w-2);
     if(code_w<8)code_w=8;
 
     /* Column headers for side-by-side */
@@ -1235,23 +1259,24 @@ static void draw_diff(int top,int rx,int rw,int h){
                 cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);
                 cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del);G.cur_bold=true;ppad(dl->old_line,code_w-1);break;
             case 3: /* Hunk header */
-                if(!G.diff_is_summary && G.diff_commit[0] && G.graph_file_sel > 0) { row--; continue; }
                 cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);G.cur_bold=true;
                 char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                 if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                 snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
-                ppad(hsub, code_w+lnum_w+2); break;
+                ppad(hsub, content_w+lnum_w+2); break;
             case 4: /* File header */
-                if(!G.diff_is_summary && G.diff_commit[0] && G.graph_file_sel > 0) { row--; continue; }
-                if(strstr(dl->new_line, "+++") || strstr(dl->old_line, "---")) { row--; continue; } /* Skip these */
-                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
+                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,content_w+lnum_w+2);break;
             case 5: /* Commit summary file list item */ {
                 bool sel = (G.diff_is_summary && G.diff_sel == di && act);
                 if(sel) { cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true; }
                 else { cbg(TH->bg_base); cfg(TH->fg_accent1); }
                 char fbuf[LINE_MAX_LEN+4]; snprintf(fbuf, sizeof(fbuf), "  → %s", dl->new_line);
-                ppad(fbuf, code_w+lnum_w+2); break;
+                ppad(fbuf, content_w+lnum_w+2); break;
             }
+            case 6: /* Metadata / Info */
+                cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
+                ppad(dl->new_line[0] ? dl->new_line : dl->old_line, content_w+lnum_w+2);
+                G.cur_italic=false; break;
             }
             rst();
         }
@@ -1259,19 +1284,21 @@ static void draw_diff(int top,int rx,int rw,int h){
         /* Side-by-side */
         while(di<G.diff_count&&row<lim){
             DiffLine *dl=&G.diff_lines[di];
-            if(dl->type==3||dl->type==4){
-                if(!G.diff_is_summary && G.diff_commit[0] && G.graph_file_sel > 0) { di++; continue; }
-                if(dl->type==4 && (strstr(dl->new_line, "+++") || strstr(dl->old_line, "---"))) { di++; continue; }
+            if(dl->type==3||dl->type==4||dl->type==6){
                 at(row,rx+1);
                 if(dl->type==3){
                     cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);
                     char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                     if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                     snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
-                    G.cur_bold=true; ppad(hsub,rw-2);
-                } else {
+                    G.cur_bold=true; ppad(hsub,content_w+lnum_w+2);
+                } else if(dl->type==4) {
                     cbg(TH->bg_header);cfg(TH->fg_accent2); G.cur_bold=true;
-                    ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);
+                    ppad(dl->new_line[0]?dl->new_line:dl->old_line,content_w+lnum_w+2);
+                } else {
+                    cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
+                    ppad(dl->new_line[0]?dl->new_line:dl->old_line,content_w+lnum_w+2);
+                    G.cur_italic=false;
                 }
                 rst(); di++; row++; continue;
             }
@@ -1284,42 +1311,85 @@ static void draw_diff(int top,int rx,int rw,int h){
                 cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
                 rst(); di++; row++; continue;
             }
-            DiffLine *od=NULL,*nd=NULL;
-            if(dl->type==2){od=dl;if(di+1<G.diff_count&&G.diff_lines[di+1].type==1){nd=&G.diff_lines[di+1];di+=2;}else di++;}
-            else if(dl->type==1){nd=dl;di++;}
-            /* Left: old */
-            at(row,rx+1);
-            if(od){
-                cbg(TH->bg_diff_del);cfg(TH->fg_linenum);
-                char lno[16]; if(od->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,od->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
-                ppad(lno, lnum_w+1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold=true; ppad(od->old_line,code_w);
+            /* Handle blocks of deletions and additions */
+            int ndel = 0, nadd = 0;
+            while (di + ndel < G.diff_count && G.diff_lines[di + ndel].type == 2) ndel++;
+            while (di + ndel + nadd < G.diff_count && G.diff_lines[di + ndel + nadd].type == 1) nadd++;
+
+            if (ndel > 0 || nadd > 0) {
+                int nmax = imax(ndel, nadd);
+                for (int i = 0; i < nmax && row < lim; i++, row++) {
+                    DiffLine *od = (i < ndel) ? &G.diff_lines[di + i] : NULL;
+                    DiffLine *nd = (i < nadd) ? &G.diff_lines[di + ndel + i] : NULL;
+
+                    /* Left: old */
+                    at(row, rx + 1);
+                    if (od) {
+                        cbg(TH->bg_diff_del); cfg(TH->fg_linenum);
+                        char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, od->old_lno);
+                        ppad(lno, lnum_w + 1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold = true; ppad(od->old_line, code_w);
+                    } else {
+                        cbg(TH->bg_panel); cfg(TH->fg_dim);
+                        for (int j = 0; j < lnum_w + 1; j++) put_cell(row, rx + 1 + j, " ");
+                        put_cell(row, rx + 1 + lnum_w + 1, "┆");
+                        for (int j = 0; j < code_w; j++) put_cell(row, rx + 1 + lnum_w + 2 + j, " ");
+                    }
+                    rst();
+
+                    /* Right: new */
+                    at(row, rx + half + 1);
+                    if (nd) {
+                        cbg(TH->bg_diff_add); cfg(TH->fg_linenum);
+                        char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, nd->new_lno);
+                        ppad(lno, lnum_w + 1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold = true; ppad(nd->new_line, code_w);
+                    } else {
+                        cbg(TH->bg_panel); cfg(TH->fg_dim);
+                        for (int j = 0; j < lnum_w + 1; j++) put_cell(row, rx + half + 1 + j, " ");
+                        put_cell(row, rx + half + 1 + lnum_w + 1, "┆");
+                        for (int j = 0; j < code_w; j++) put_cell(row, rx + half + 1 + lnum_w + 2 + j, " ");
+                    }
+                    rst();
+                }
+                di += ndel + nadd;
             } else {
-                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) { at(row, rx+1+i); put_cell(row, rx+1+i, " "); }
+                /* Fallback for other types not explicitly handled above (though there shouldn't be any in this loop section) */
+                di++;
             }
-            rst();
-            /* Right: new */
-            at(row,rx+half+1);
-            if(nd){
-                cbg(TH->bg_diff_add);cfg(TH->fg_linenum);
-                char lno[16]; if(nd->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,nd->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
-                ppad(lno, lnum_w+1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold=true; ppad(nd->new_line,code_w);
-            } else {
-                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) { at(row, rx+half+1+i); put_cell(row, rx+half+1+i, " "); }
-            }
-            rst(); row++;
         }
     }
     /* Fill */
     while(row<lim){at(row,rx+1);cbg(TH->bg_base);for(int i=0;i<rw-2;i++)put_cell(row,rx+1+i," ");rst();row++;}
-    /* Scrollbar */
+    /* Scrollbar & Minimap */
     if(G.diff_count>vis&&vis>2){
         int bh=imax(1,(vis*vis)/G.diff_count);
         int bpos=maxsc>0?((G.diff_scroll*(vis-bh))/maxsc):0;
         G.sc_y = top+1; G.sc_h = vis; G.sc_total = G.diff_count; G.sc_vis = vis;
+
+        /* Prepare minimap markers */
+        char markers[1024] = {0}; /* 0=none, 1=add, 2=del, 3=both */
+        if (vis < 1024) {
+            for (int i=0; i<G.diff_count; i++) {
+                int r = (i * vis) / G.diff_count;
+                if (r < vis) {
+                    if (G.diff_lines[i].type == 1) markers[r] |= 1;
+                    else if (G.diff_lines[i].type == 2) markers[r] |= 2;
+                }
+            }
+        }
+
         for(int r=0;r<vis;r++){
-            at(top+1+r,rx+rw-1);
-            cfg(r>=bpos&&r<bpos+bh?TH->fg_accent2:TH->fg_dim);
-            put_cell(top+1+r, rx+rw-1, r>=bpos&&r<bpos+bh?"█":"│");
+            bool thumb = (r>=bpos&&r<bpos+bh);
+            for (int sw=0; sw<3; sw++) {
+                at(top+1+r,rx+rw-1-sw);
+                if (thumb) {
+                    cfg(TH->fg_accent2); put_cell(top+1+r, rx+rw-1-sw, "█");
+                } else {
+                    if (markers[r] == 1) { cfg(TH->fg_staged); put_cell(top+1+r, rx+rw-1-sw, "▒"); }
+                    else if (markers[r] == 2) { cfg(TH->fg_unstaged); put_cell(top+1+r, rx+rw-1-sw, "▒"); }
+                    else if (markers[r] == 3) { cfg(TH->fg_accent1); put_cell(top+1+r, rx+rw-1-sw, "▒"); }
+                    else { cfg(TH->fg_dim); put_cell(top+1+r, rx+rw-1-sw, sw==0?"│":" "); }
+                }
+            }
         }
         rst();
     } else {
@@ -1924,7 +1994,15 @@ static void handle_mouse(MouseEvt m){
         if(cl && m.col==G.lw){G.dragging_v=true; return;}
         if(cl && m.col<G.lw && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
         if(cl && m.col==G.cols && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
-            G.dragging_sc = true; return;
+            G.dragging_sc = true;
+            int rel_y = m.row - G.sc_y;
+            int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
+            int max_bpos = G.sc_h - bh;
+            if(max_bpos > 0){
+                int bpos = iclamp(rel_y - bh/2, 0, max_bpos);
+                G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+            }
+            return;
         }
 
         bool in_l=(m.col>=1&&m.col<=G.lw);
@@ -1977,7 +2055,8 @@ static void handle_mouse(MouseEvt m){
                             G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
                         } else {
                             char *fpath = G.commits[ci].files[fi];
-                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.commits[ci].hash, fpath);
+                            const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.commits[ci].hash, fpath);
                             char *o = git_run(cmd);
                             snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.commits[ci].hash, fpath);
                             G.diff_is_summary = false;
@@ -1996,7 +2075,8 @@ static void handle_mouse(MouseEvt m){
                     DiffLine *dl = &G.diff_lines[t];
                     if(dl->type == 5){
                         char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.diff_commit, fpath);
+                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
                         char *o = git_run(cmd);
                         snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
                         G.diff_is_summary = false;
@@ -2153,6 +2233,26 @@ static void handle_key(Key k){
         case 'T':G.theme_idx=(G.theme_idx+1)%NTHEMES;OK("Theme: %s",TH->name);return;
         case 'V':G.vi_enabled=!G.vi_enabled;G.vi_mode=VIMODE_NORMAL;G.vi_count=0;
                  OK("Vi mode: %s",G.vi_enabled?"ON":"OFF");return;
+        case 'H':G.diff_continuous=!G.diff_continuous;
+                 if (G.current_view == VIEW_STATUS && G.focus == FOCUS_CHANGES) update_diff();
+                 else if (G.current_view == VIEW_STATUS && G.focus == FOCUS_GRAPH) {
+                     /* Re-trigger whatever is currently showing in graph */
+                     GitCommit *c = &G.commits[G.commit_sel];
+                     if (G.graph_file_sel == -1) load_commit_summary(c->hash);
+                     else if (G.graph_file_sel == 0) load_diff_commit(c->hash);
+                     else {
+                         char *fpath = c->files[G.graph_file_sel];
+                         const char *ctx = G.diff_continuous ? "-U1000" : "-U3";
+                         char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx, c->hash, fpath);
+                         char *o = git_run(cmd);
+                         parse_diff(o?o:""); free(o);
+                     }
+                 } else if (G.current_view == VIEW_LOG) {
+                     GitCommit *c = &G.commits[G.commit_sel];
+                     load_diff_commit(c->hash);
+                 }
+                 OK("Continuous Diff: %s",G.diff_continuous?"ON (full context)":"OFF (hunks only)");
+                 return;
         }
     }
     if(k.type==KEY_ESC){
@@ -2251,7 +2351,8 @@ static void handle_key(Key k){
                         G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
                     } else {
                         char *fpath = c->files[G.graph_file_sel];
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, c->hash, fpath);
                         char *o = git_run(cmd);
                         snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
                         G.diff_is_summary = false;
@@ -2293,7 +2394,8 @@ static void handle_key(Key k){
                     G.diff_is_summary = false; load_diff_commit(c->hash);
                 } else {
                     char *fpath = c->files[G.graph_file_sel];
-                    char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                    const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                    char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, c->hash, fpath);
                     char *o = git_run(cmd);
                     snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
                     G.diff_is_summary = false;
@@ -2327,7 +2429,8 @@ static void handle_key(Key k){
                     DiffLine *dl = &G.diff_lines[G.diff_sel];
                     if(dl->type == 5){
                         char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.diff_commit, fpath);
+                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
                         char *o = git_run(cmd);
                         snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
                         G.diff_is_summary = false;
@@ -2393,7 +2496,8 @@ static void handle_key(Key k){
                         G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
                     } else {
                         char *fpath = c->files[G.graph_file_sel];
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, c->hash, fpath);
                         char *o = git_run(cmd);
                         snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
                         G.diff_is_summary = false;
@@ -2425,7 +2529,8 @@ static void handle_key(Key k){
                     G.diff_is_summary = false; load_diff_commit(c->hash);
                 } else {
                     char *fpath = c->files[G.graph_file_sel];
-                    char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
+                    const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                    char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, c->hash, fpath);
                     char *o = git_run(cmd);
                     snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", c->hash, fpath);
                     G.diff_is_summary = false;
@@ -2453,7 +2558,8 @@ static void handle_key(Key k){
                     DiffLine *dl = &G.diff_lines[G.diff_sel];
                     if(dl->type == 5){
                         char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.diff_commit, fpath);
+                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
                         char *o = git_run(cmd);
                         snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
                         G.diff_is_summary = false;
@@ -2526,7 +2632,7 @@ int main(int argc, char **argv){
     memset(&G,0,sizeof(G));
     G.running=true; G.current_view=VIEW_STATUS; G.focus=FOCUS_CHANGES;
     G.theme_idx=0; G.vi_enabled=false; G.vi_mode=VIMODE_NORMAL;
-    G.diff_sidebyside=true;
+    G.diff_sidebyside=true; G.diff_continuous=false;
 
     signal(SIGWINCH,sig_winch);
     signal(SIGINT, sig_int);
