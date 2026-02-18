@@ -268,6 +268,8 @@ typedef struct {
     BrowserFile browser_files[1024];
     int browser_count, browser_sel, browser_scroll;
     char browser_path[512];
+    bool editor_active;   /* Right pane toggle: false=Diff, true=Editor */
+    bool browser_active;  /* Left pane toggle:  false=Git,  true=Browser */
 
     /* Selection in Diff */
     int sel_start_y, sel_start_x;
@@ -959,10 +961,10 @@ static void draw_tabbar(void){
     static const struct{const char *n,*k;View v;}tabs[]={
         {"Changes","1",VIEW_STATUS},{"Log","2",VIEW_LOG},
         {"Branches","3",VIEW_BRANCHES},{"Stash","4",VIEW_STASH},
-        {"Editor","5",VIEW_EDITOR},{"Help","?",VIEW_HELP}
+        {"Help","?",VIEW_HELP}
     };
     int cur_c = 10;
-    for(int i=0;i<6;i++){
+    for(int i=0;i<5;i++){
         G.tab_x[i] = cur_c;
         bool act=(tabs[i].v==G.current_view);
         at(1, cur_c);
@@ -974,7 +976,7 @@ static void draw_tabbar(void){
         at(1, cur_c); cbg(TH->bg_tab_inact); cfg(TH->fg_dim); put_cell(1, cur_c, "│");
         cur_c++;
     }
-    G.tab_x[6] = cur_c;
+    G.tab_x[5] = cur_c;
     /* Theme & branch - right aligned */
     cbg(TH->bg_tab_inact); cfg(TH->fg_accent3);
     char rbuf[160]; int rlen=snprintf(rbuf,sizeof(rbuf)," ◈ %s  ⎇ %s ",TH->name,G.branch_name);
@@ -993,10 +995,12 @@ static void draw_statusbar(void){
     at(G.rows,1); cbg(TH->bg_panel);
     const char *hint="";
     if(G.current_view==VIEW_STATUS){
-        if(G.focus==FOCUS_CHANGES) hint="SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme";
-        else if(G.focus==FOCUS_GRAPH) hint="↑/↓:move  ↵:diff  Home/End:top/bot  T:theme";
+        if(G.focus==FOCUS_CHANGES) hint="e:edit  SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme";
+        else if(G.focus==FOCUS_GRAPH) hint="e:edit  ↑/↓:move  ↵:diff  Home/End:top/bot  T:theme";
+        else if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open  ←:back  b:close";
+        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Enter:newline  BS:delete  Ctrl+S:save  Ctrl+V:paste  e:close";
         else hint="↑/↓:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
-    } else if(G.current_view==VIEW_LOG) hint="↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
+    } else if(G.current_view==VIEW_LOG) hint="e:edit  ↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
     else if(G.current_view==VIEW_EDITOR) {
@@ -1601,51 +1605,33 @@ static void draw_help(int top,int h){
 
     static const char *E[][2]={
         {"NAVIGATION",""},
-        {"  Tab / Shift+Tab","Cycle views / focus panes"},
-        {"  1-4 / ?","Jump: Changes, Log, Branches, Stash, Help"},
+        {"  Tab / Shift+Tab","Cycle through all VISIBLE panes"},
+        {"  1-4 / ?","Jump to specific Git view"},
         {"  ↑/↓","Move selection"},
-        {"  ←/→","Switch focus pane"},
+        {"  ←/→","Switch focus (or Browser back/enter)"},
         {"  Home / End","Top / bottom"},
         {"  PgUp/PgDn","Page scroll"},
         {"",""},
         {"CHANGES PANE",""},
+        {"  e","Open selected file in Editor"},
         {"  Space / Ctrl+S","Stage / unstage selected file"},
         {"  a / u","Stage all / Unstage all"},
-        {"  d","Discard changes (careful!)"},
-        {"  Enter / =","View diff for file, switch to diff pane"},
-        {"",""},
-        {"DIFF PANE",""},
-        {"  s","Toggle side-by-side / unified"},
-        {"  ↑/↓","Scroll diff vertically"},
-        {"  [ / ]","Horizontal scroll"},
-        {"",""},
-        {"GRAPH PANE (in Changes view)",""},
-        {"  ↑/↓","Move through commits"},
-        {"  Enter","Show commit diff in diff pane"},
-        {"",""},
-        {"BRANCHES",""},
-        {"  Enter","Checkout selected branch"},
-        {"  n","Create new branch (prompt)"},
-        {"  D","Delete branch (force)"},
-        {"",""},
-        {"STASH",""},
-        {"  Enter","Apply stash"},
-        {"  p","Pop stash (apply + drop)"},
-        {"  D","Drop stash"},
+        {"  d","Discard changes"},
+        {"  Enter / =","Toggle Diff pane"},
         {"",""},
         {"EDITOR",""},
+        {"  e","Toggle Editor visibility (right pane)"},
         {"  Arrows","Move cursor"},
         {"  Enter","Insert newline"},
         {"  BS","Delete character"},
         {"  Ctrl+S","Save file"},
         {"  Ctrl+V","Paste from clipboard"},
-        {"  f / Tab","Switch focus to File Browser"},
         {"",""},
         {"FILE BROWSER",""},
+        {"  b","Toggle Browser visibility (left pane)"},
         {"  ↑/↓","Move selection"},
-        {"  Enter / →","Open file / Enter directory"},
+        {"  Enter / →","Open file in Editor / Enter directory"},
         {"  ←","Go back to parent directory"},
-        {"  Tab","Switch focus back to Editor"},
         {"",""},
         {"DIFF SELECTION",""},
         {"  Mouse Drag","Select text in diff view"},
@@ -1658,7 +1644,7 @@ static void draw_help(int top,int h){
         {"  f / Ctrl+F","Fetch + pull"},
         {"  s","Stash working changes"},
         {"  R / Ctrl+R / Ctrl+L","Full refresh"},
-        {"  T","Cycle theme: Dark+ → VS-Light → Solarized"},
+        {"  T","Cycle theme"},
         {"  ?","Toggle this help"},
         {"  q / Esc / Ctrl+Q","Go back / quit"},
         {"",""},
@@ -1831,6 +1817,14 @@ static void draw_browser(int top, int h){
     box_bot(top+h-1, 1, w);
 }
 
+static Color get_token_color(const char *tok, bool is_comment){
+    if(is_comment) return TH->fg_diff_ctx;
+    static const char *kw[] = {"if","else","for","while","do","return","static","const","int","char","void","bool","struct","typedef","enum","#include","#define"};
+    for(int i=0; i<17; i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
+    if(tok[0] == '"' || tok[0] == '\'') return TH->fg_unstaged;
+    return TH->fg_normal;
+}
+
 static void draw_editor(int top, int rx, int rw, int h){
     bool act = (G.focus == FOCUS_EDITOR);
     char title[512];
@@ -1847,8 +1841,36 @@ static void draw_editor(int top, int rx, int rw, int h){
         cfg(TH->fg_linenum);
         char lno[16]; snprintf(lno, sizeof(lno), "%4d ", i+1); ppad(lno, 5);
         cfg(TH->fg_dim); ppad("│", 1);
-        cfg(TH->fg_normal);
-        ppad(G.editor.lines[i], rw-8);
+        
+        /* Simple tokenizing for highlighting */
+        char *line = G.editor.lines[i];
+        int len = (int)strlen(line);
+        int cur_c = rx + 7;
+        bool in_comment = (strstr(line, "//") != NULL); /* extremely basic */
+        
+        char buf[512]; int bi=0;
+        for(int j=0; j<=len && cur_c < rx+rw-1; j++){
+            char c = line[j];
+            if(isspace(c) || ispunct(c) || c == '\0'){
+                if(bi > 0){
+                    buf[bi] = '\0';
+                    cfg(get_token_color(buf, in_comment && (strstr(line, "//") <= line + j - bi)));
+                    at(row, cur_c - bi);
+                    ppad(buf, bi);
+                    bi = 0;
+                }
+                if(c != '\0'){
+                    at(row, cur_c);
+                    cfg(TH->fg_dim);
+                    char cs[2] = {c, 0}; put_cell(row, cur_c, cs);
+                    cur_c++;
+                }
+            } else {
+                buf[bi++] = c;
+                cur_c++;
+            }
+        }
+
         if(act && i == G.editor.cur_y){
             at(row, rx+7+G.editor.cur_x - G.editor.scroll_x);
             if(G.editor.cur_x - G.editor.scroll_x >= 0 && G.editor.cur_x - G.editor.scroll_x < rw-8){
@@ -1872,22 +1894,28 @@ static void draw(void){
     int ct=2, ch=G.rows-2;
     switch(G.current_view){
     case VIEW_STATUS:
-        if(G.lh_chg > 2) draw_changes(ct, G.lh_chg);
-        if(G.lh_gph > 2) draw_graph(ct+G.lh_chg, G.lh_gph);
-        draw_diff(ct, G.rx, G.rw, ch);
+        if(G.browser_active){
+            draw_browser(ct, ch);
+        } else {
+            if(G.lh_chg > 2) draw_changes(ct, G.lh_chg);
+            if(G.lh_gph > 2) draw_graph(ct+G.lh_chg, G.lh_gph);
+        }
+        
+        if(G.editor_active){
+            draw_editor(ct, G.rx, G.rw, ch);
+        } else {
+            draw_diff(ct, G.rx, G.rw, ch);
+        }
         break;
     case VIEW_LOG:{
         int lh=ch*55/100, dh=ch-lh;
         draw_log(ct,lh);
-        draw_diff(ct+lh,1,G.cols,dh);
+        if(G.editor_active) draw_editor(ct+lh, 1, G.cols, dh);
+        else draw_diff(ct+lh,1,G.cols,dh);
         break;
     }
     case VIEW_BRANCHES: draw_branches(ct,ch); break;
     case VIEW_STASH:    draw_stash(ct,ch);    break;
-    case VIEW_EDITOR:
-        draw_browser(ct, ch);
-        draw_editor(ct, G.rx, G.rw, ch);
-        break;
     case VIEW_HELP:     draw_help(ct,ch);     break;
     default: break;
     }
@@ -2577,6 +2605,35 @@ static void handle_key(Key k){
         case 'P':action_push();return;
         case 'f':action_pull();return;
         case 'y':if(G.selecting) action_copy_selection(); return;
+        case 'e':
+            if(G.current_view == VIEW_STATUS){
+                if(G.focus == FOCUS_CHANGES && G.file_count > 0){
+                    editor_load(G.files[G.file_sel].path); G.editor_active = true; G.focus = FOCUS_EDITOR;
+                } else if(G.focus == FOCUS_GRAPH && G.commit_count > 0){
+                    GitCommit *c = &G.commits[G.commit_sel];
+                    if(G.graph_file_sel > 0){
+                        editor_load(c->files[G.graph_file_sel]); G.editor_active = true; G.focus = FOCUS_EDITOR;
+                    } else { G.editor_active = !G.editor_active; }
+                } else { G.editor_active = !G.editor_active; }
+            } else if(G.current_view == VIEW_LOG){
+                if(!G.editor_active && G.commit_count > 0){
+                    GitCommit *c = &G.commits[G.commit_sel];
+                    if(G.graph_file_sel > 0) editor_load(c->files[G.graph_file_sel]);
+                    else if(c->hash[0]) {
+                        /* Maybe load a commit summary? For now just toggle */
+                        G.editor_active = true;
+                    }
+                }
+                G.editor_active = !G.editor_active;
+            }
+            return;
+        case 'b':
+            if(G.current_view == VIEW_STATUS){
+                G.browser_active = !G.browser_active;
+                if(G.browser_active){ if(!G.browser_count) load_browser("."); G.focus = FOCUS_BROWSER; }
+                else G.focus = FOCUS_CHANGES;
+            }
+            return;
         case 'T':G.theme_idx=(G.theme_idx+1)%NTHEMES;OK("Theme: %s",TH->name);return;
         case 'H':G.diff_continuous=!G.diff_continuous;
                  if (G.current_view == VIEW_STATUS && G.focus == FOCUS_CHANGES) update_diff();
@@ -2612,12 +2669,22 @@ static void handle_key(Key k){
         return;
     }
     if(k.type==KEY_TAB){
-        if(G.current_view==VIEW_STATUS)G.focus=(FocusPane)((G.focus+1)%3);
+        if(G.current_view==VIEW_STATUS){
+            if(G.focus == FOCUS_CHANGES) G.focus = FOCUS_GRAPH;
+            else if(G.focus == FOCUS_GRAPH) G.focus = G.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+            else if(G.focus == FOCUS_DIFF || G.focus == FOCUS_EDITOR) G.focus = G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
+            else if(G.focus == FOCUS_BROWSER) G.focus = G.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+        }
         else G.current_view=(View)((G.current_view+1)%VIEW_COUNT);
         return;
     }
     if(k.type==KEY_SHIFT_TAB){
-        if(G.current_view==VIEW_STATUS)G.focus=(FocusPane)((G.focus+2)%3);
+        if(G.current_view==VIEW_STATUS){
+            if(G.focus == FOCUS_CHANGES) G.focus = G.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+            else if(G.focus == FOCUS_GRAPH) G.focus = G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
+            else if(G.focus == FOCUS_DIFF || G.focus == FOCUS_EDITOR) G.focus = FOCUS_GRAPH;
+            else if(G.focus == FOCUS_BROWSER) G.focus = G.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+        }
         else G.current_view=(View)((G.current_view+VIEW_COUNT-1)%VIEW_COUNT);
         return;
     }
@@ -2625,6 +2692,42 @@ static void handle_key(Key k){
     switch(G.current_view){
     /* ──── STATUS ──── */
     case VIEW_STATUS:{
+        if(G.focus == FOCUS_BROWSER){
+            int cnt=G.browser_count;
+            switch(k.type){
+            case KEY_UP:   G.browser_sel=imax(0, G.browser_sel-1); break;
+            case KEY_DOWN: G.browser_sel=imin(cnt>0?cnt-1:0, G.browser_sel+1); break;
+            case KEY_LEFT: {
+                char next[1024]; snprintf(next, sizeof(next), "%s/..", G.browser_path);
+                load_browser(next); G.browser_sel=0; break;
+            }
+            case KEY_RIGHT:case KEY_ENTER: {
+                if(!cnt) break;
+                BrowserFile *f = &G.browser_files[G.browser_sel];
+                char next[1024]; snprintf(next, sizeof(next), "%s/%s", G.browser_path, f->path);
+                if(f->is_dir){ load_browser(next); G.browser_sel=0; }
+                else { editor_load(next); G.editor_active=true; G.focus=FOCUS_EDITOR; }
+                break;
+            }
+            default: break;
+            }
+            return;
+        }
+        if(G.focus == FOCUS_EDITOR){
+            switch(k.type){
+            case KEY_UP:   G.editor.cur_y = imax(0, G.editor.cur_y-1); break;
+            case KEY_DOWN: G.editor.cur_y = imin(G.editor.line_count>0?G.editor.line_count-1:0, G.editor.cur_y+1); break;
+            case KEY_LEFT: G.editor.cur_x = imax(0, G.editor.cur_x-1); break;
+            case KEY_RIGHT:G.editor.cur_x = imin(G.editor.lines[G.editor.cur_y] ? (int)strlen(G.editor.lines[G.editor.cur_y]) : 0, G.editor.cur_x+1); break;
+            case KEY_ENTER:editor_newline(); break;
+            case KEY_BACKSPACE:editor_backspace(); break;
+            case KEY_CTRL_S:editor_save(); break;
+            case KEY_CTRL_V:editor_paste(); break;
+            case KEY_CHAR: editor_insert_char(k.ch); break;
+            default: break;
+            }
+            return;
+        }
         if(k.type==KEY_LEFT){
             if(G.focus==FOCUS_DIFF)G.focus=FOCUS_GRAPH;
             else if(G.focus==FOCUS_GRAPH)G.focus=FOCUS_CHANGES;
@@ -2972,49 +3075,6 @@ static void handle_key(Key k){
         break;
     }
     case VIEW_HELP:if(k.type==KEY_CHAR&&k.ch=='q')G.current_view=VIEW_STATUS;break;
-    case VIEW_EDITOR:{
-        if(k.type == KEY_TAB){
-            G.focus = (G.focus == FOCUS_EDITOR) ? FOCUS_BROWSER : FOCUS_EDITOR;
-            return;
-        }
-        if(G.focus == FOCUS_BROWSER){
-            int cnt=G.browser_count;
-            switch(k.type){
-            case KEY_UP:   G.browser_sel=imax(0, G.browser_sel-1); break;
-            case KEY_DOWN: G.browser_sel=imin(cnt>0?cnt-1:0, G.browser_sel+1); break;
-            case KEY_LEFT: {
-                char next[1024]; snprintf(next, sizeof(next), "%s/..", G.browser_path);
-                load_browser(next); G.browser_sel=0; break;
-            }
-            case KEY_RIGHT:case KEY_ENTER: {
-                if(!cnt) break;
-                BrowserFile *f = &G.browser_files[G.browser_sel];
-                char next[1024]; snprintf(next, sizeof(next), "%s/%s", G.browser_path, f->path);
-                if(f->is_dir){ load_browser(next); G.browser_sel=0; }
-                else { editor_load(next); G.focus=FOCUS_EDITOR; }
-                break;
-            }
-            default: break;
-            }
-        } else if(G.focus == FOCUS_EDITOR){
-            switch(k.type){
-            case KEY_UP:   G.editor.cur_y = imax(0, G.editor.cur_y-1); break;
-            case KEY_DOWN: G.editor.cur_y = imin(G.editor.line_count>0?G.editor.line_count-1:0, G.editor.cur_y+1); break;
-            case KEY_LEFT: G.editor.cur_x = imax(0, G.editor.cur_x-1); break;
-            case KEY_RIGHT:G.editor.cur_x = imin((int)strlen(G.editor.lines[G.editor.cur_y]), G.editor.cur_x+1); break;
-            case KEY_ENTER:editor_newline(); break;
-            case KEY_BACKSPACE:editor_backspace(); break;
-            case KEY_CTRL_S:editor_save(); break;
-            case KEY_CTRL_V:editor_paste(); break;
-            case KEY_CHAR: 
-                if(k.ch == 'f') G.focus = FOCUS_BROWSER;
-                else editor_insert_char(k.ch); 
-                break;
-            default: break;
-            }
-        }
-        break;
-    }
     default:break;
     }
 }
@@ -3036,6 +3096,7 @@ int main(int argc, char **argv){
     G.running=true; G.current_view=VIEW_STATUS; G.focus=FOCUS_CHANGES;
     G.theme_idx=0;
     G.clipboard=NULL;
+    G.editor_active=false; G.browser_active=false;
     G.diff_sidebyside=true; G.diff_continuous=false;
 
     signal(SIGWINCH,sig_winch);
