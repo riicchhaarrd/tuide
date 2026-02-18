@@ -1,25 +1,21 @@
 
 /*
- * gitui - A modern, no-dependency Git TUI written in C99
+ * gitui v2.0 - Modern Git TUI, pure C99, zero dependencies
  *
- * Features:
- *   - Status view (staged/unstaged files)
- *   - Log view (commit history with graph)
- *   - Diff view (inline diff for selected file)
- *   - Branch view (local/remote branches)
- *   - Stash view
- *   - Stage/unstage files with spacebar
- *   - Commit with message prompt
- *   - Push/Pull
- *   - Checkout branches
- *   - Create/delete branches
- *   - Interactive search/filter
- *   - Mouse support
- *   - Responsive layout
- *   - Color themes
+ *  Layout (Status view):
+ *  ┌─── Changes ───┬──────────── Side-by-Side Diff ────────────┐
+ *  │ staged files  │  old (left)         │  new (right)        │
+ *  │ unstaged files│                     │                      │
+ *  ├─── Graph ─────┤                     │                      │
+ *  │ commit graph  │                     │                      │
+ *  └───────────────┴─────────────────────┴──────────────────────┘
  *
- * Build: cc -std=c99 -O2 -o gitui gitui.c
- * Run:   ./gitui (from inside a git repo)
+ *  Themes: T cycles Dark+ / VS-Light-Blue / Solarized-Dark
+ *  Vi mode: normal/insert with full motion set
+ *  Mouse:   click to focus panes, scroll wheel, click to select
+ *
+ *  Build:  cc -std=c99 -O2 -o gitui gitui.c
+ *  Run:    ./gitui
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -29,1889 +25,1710 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
-#include <sys/wait.h>
 #include <fcntl.h>
-#include <errno.h>
 #include <stdarg.h>
 #include <ctype.h>
 #include <signal.h>
 #include <time.h>
 #include <stdbool.h>
 
-/* ─── Constants ─────────────────────────────────────────────── */
-#define MAX_FILES    512
-#define MAX_COMMITS  1024
-#define MAX_BRANCHES 256
-#define MAX_STASHES  64
-#define MAX_DIFF_LINES 4096
-#define LINE_MAX_LEN 512
-#define INPUT_MAX    256
-#define VERSION      "1.0.0"
+/* ================================================================
+   CONSTANTS
+================================================================ */
+#define VERSION        "2.0.0"
+#define MAX_FILES      512
+#define MAX_COMMITS    512
+#define MAX_BRANCHES   256
+#define MAX_STASHES    64
+#define MAX_DIFF_LINES 8192
+#define LINE_MAX_LEN   512
+#define INPUT_MAX      512
+#define GRAPH_COLS     8
 
-/* ─── ANSI / Terminal codes ──────────────────────────────────── */
+/* ================================================================
+   TERMINAL CODES
+================================================================ */
 #define ESC "\x1b"
 #define CSI ESC "["
 
-#define CLEAR        CSI "2J" CSI "H"
-#define HIDE_CURSOR  CSI "?25l"
-#define SHOW_CURSOR  CSI "?25h"
-#define ALT_SCREEN   ESC "[?1049h"
-#define NORM_SCREEN  ESC "[?1049l"
-#define MOUSE_ON     ESC "[?1000h" ESC "[?1006h"
-#define MOUSE_OFF    ESC "[?1000l" ESC "[?1006l"
-#define RESET        CSI "0m"
+#define T_CLEAR      CSI "2J" CSI "H"
+#define T_HIDE       CSI "?25l"
+#define T_SHOW       CSI "?25h"
+#define T_ALT        ESC "[?1049h"
+#define T_NORM       ESC "[?1049l"
+#define T_MOUSE_ON   ESC "[?1000h" ESC "[?1002h" ESC "[?1006h"
+#define T_MOUSE_OFF  ESC "[?1000l" ESC "[?1002l" ESC "[?1006l"
+#define T_RESET      CSI "0m"
+#define T_BOLD       CSI "1m"
+#define T_DIM        CSI "2m"
+#define T_ITALIC     CSI "3m"
+#define T_UNDER      CSI "4m"
+#define T_REVERSE    CSI "7m"
 
-/* Colors */
-#define FG_BLACK   CSI "30m"
-#define FG_RED     CSI "31m"
-#define FG_GREEN   CSI "32m"
-#define FG_YELLOW  CSI "33m"
-#define FG_BLUE    CSI "34m"
-#define FG_MAGENTA CSI "35m"
-#define FG_CYAN    CSI "36m"
-#define FG_WHITE   CSI "37m"
-#define FG_BRIGHT_BLACK   CSI "90m"
-#define FG_BRIGHT_RED     CSI "91m"
-#define FG_BRIGHT_GREEN   CSI "92m"
-#define FG_BRIGHT_YELLOW  CSI "93m"
-#define FG_BRIGHT_BLUE    CSI "94m"
-#define FG_BRIGHT_MAGENTA CSI "95m"
-#define FG_BRIGHT_CYAN    CSI "96m"
-#define FG_BRIGHT_WHITE   CSI "97m"
+static void fg(int r, int g_, int b) { printf(CSI "38;2;%d;%d;%dm", r, g_, b); }
+static void bg(int r, int g_, int b) { printf(CSI "48;2;%d;%d;%dm", r, g_, b); }
 
-#define BG_BLACK   CSI "40m"
-#define BG_RED     CSI "41m"
-#define BG_GREEN   CSI "42m"
-#define BG_YELLOW  CSI "43m"
-#define BG_BLUE    CSI "44m"
-#define BG_MAGENTA CSI "45m"
-#define BG_CYAN    CSI "46m"
-#define BG_WHITE   CSI "47m"
-#define BG_BRIGHT_BLACK   CSI "100m"
-#define BG_BRIGHT_BLUE    CSI "104m"
+/* ================================================================
+   THEME SYSTEM
+================================================================ */
+typedef struct { int r, g, b; } Color;
 
-#define BOLD      CSI "1m"
-#define DIM       CSI "2m"
-#define ITALIC    CSI "3m"
-#define UNDERLINE CSI "4m"
-#define REVERSE   CSI "7m"
+typedef struct {
+    const char *name;
+    Color bg_base, bg_panel, bg_sel, bg_tab_act, bg_tab_inact, bg_header;
+    Color bg_diff_add, bg_diff_del, bg_diff_hdr;
+    Color fg_normal, fg_dim, fg_bright, fg_sel;
+    Color fg_accent1, fg_accent2, fg_accent3;
+    Color fg_staged, fg_unstaged, fg_untracked, fg_conflict;
+    Color fg_diff_add, fg_diff_del, fg_diff_hdr, fg_diff_ctx;
+    Color fg_graph[6];
+    Color fg_ref_local, fg_ref_remote, fg_ref_tag;
+    Color fg_ok, fg_err, fg_linenum;
+} Theme;
 
-/* ─── Types ──────────────────────────────────────────────────── */
+/* Dark+ (VSCode Dark+) */
+static const Theme TH_DARK = {
+    "Dark+ (VSCode)",
+    {30,30,30},{37,37,38},{58,58,58},{30,30,30},{45,45,45},{50,50,50},
+    {19,41,19},{51,18,18},{25,40,60},
+    {212,212,212},{90,90,90},{255,255,255},{255,255,255},
+    {220,220,170},{156,220,254},{103,150,100},
+    {78,201,176},{244,71,71},{128,128,128},{252,100,100},
+    {130,255,130},{255,100,100},{86,156,214},{180,180,180},
+    {{86,156,214},{220,220,170},{78,201,176},{215,186,125},{244,71,71},{197,134,192}},
+    {78,201,176},{197,134,192},{220,220,170},
+    {78,201,176},{244,71,71},{90,90,90}
+};
 
+/* Visual Studio Community Light Blue C++ */
+static const Theme TH_VSLIGHT = {
+    "VS Community Light",
+    {242,242,242},{230,234,242},{0,120,215},{242,242,242},{218,223,230},{205,214,229},
+    {210,240,210},{250,210,210},{210,225,250},
+    {30,30,30},{140,140,150},{0,0,0},{255,255,255},
+    {116,83,31},{0,80,170},{80,100,80},
+    {0,128,0},{180,0,0},{100,100,120},{200,0,0},
+    {0,100,0},{150,0,0},{0,50,180},{60,60,60},
+    {{0,80,170},{0,120,0},{170,0,0},{140,90,0},{120,0,120},{0,110,120}},
+    {0,100,0},{100,0,150},{140,90,0},
+    {0,100,0},{180,0,0},{160,160,170}
+};
+
+/* Solarized Dark */
+static const Theme TH_SOL = {
+    "Solarized Dark",
+    {0,43,54},{7,54,66},{0,73,89},{0,43,54},{7,54,66},{14,65,78},
+    {0,55,30},{60,20,10},{0,55,80},
+    {131,148,150},{60,80,85},{253,246,227},{253,246,227},
+    {181,137,0},{38,139,210},{88,110,117},
+    {133,153,0},{220,50,47},{88,110,117},{203,75,22},
+    {133,153,0},{220,50,47},{38,139,210},{131,148,150},
+    {{38,139,210},{133,153,0},{181,137,0},{203,75,22},{211,54,130},{42,161,152}},
+    {133,153,0},{211,54,130},{181,137,0},
+    {133,153,0},{220,50,47},{60,80,85}
+};
+
+static const Theme *THEMES[] = {&TH_DARK, &TH_VSLIGHT, &TH_SOL};
+#define NTHEMES 3
+
+/* ================================================================
+   ENUMS & STRUCTS
+================================================================ */
+typedef enum { VIEW_STATUS,VIEW_LOG,VIEW_BRANCHES,VIEW_STASH,VIEW_HELP,VIEW_COUNT } View;
+typedef enum { VIMODE_NORMAL,VIMODE_INSERT } ViMode;
+typedef enum { FOCUS_CHANGES,FOCUS_GRAPH,FOCUS_DIFF } FocusPane;
 typedef enum {
-    VIEW_STATUS,
-    VIEW_LOG,
-    VIEW_DIFF,
-    VIEW_BRANCHES,
-    VIEW_STASH,
-    VIEW_HELP,
-    VIEW_COUNT
-} View;
-
-typedef enum {
-    FILE_UNTRACKED,
-    FILE_MODIFIED,
-    FILE_STAGED_MODIFIED,
-    FILE_STAGED_NEW,
-    FILE_STAGED_DELETED,
-    FILE_DELETED,
-    FILE_RENAMED,
-    FILE_CONFLICT
+    FS_UNTRACKED,FS_MODIFIED,FS_STAGED_MODIFY,FS_STAGED_NEW,
+    FS_STAGED_DEL,FS_DELETED,FS_RENAMED,FS_CONFLICT,FS_COPIED
 } FileStatus;
 
+typedef struct { char path[512]; char orig[512]; FileStatus st; bool staged; } GitFile;
 typedef struct {
-    char path[512];
-    char orig_path[512]; /* for renames */
-    FileStatus status;
-    bool staged;
-} GitFile;
-
-typedef struct {
-    char hash[12];
-    char author[64];
-    char date[32];
-    char subject[256];
-    char refs[128];
+    char hash[16],author[64],email[64],date[32],subject[256],refs[192];
+    char graph[24];
+    int  graph_col;
 } GitCommit;
-
+typedef struct { char name[128],upstream[128]; bool is_remote,is_current; int ahead,behind; } GitBranch;
+typedef struct { char message[256],hash[16]; int index; } GitStash;
 typedef struct {
-    char name[128];
-    bool is_remote;
-    bool is_current;
-    char upstream[128];
-    int ahead;
-    int behind;
-} GitBranch;
-
-typedef struct {
-    char message[256];
-    char hash[12];
-    int index;
-} GitStash;
-
-typedef struct {
-    char line[LINE_MAX_LEN];
-    int type; /* 0=context, 1=added, 2=removed, 3=header */
+    char old_line[LINE_MAX_LEN], new_line[LINE_MAX_LEN];
+    int old_lno, new_lno;
+    int type; /* 0=ctx 1=add 2=del 3=hunk 4=fhdr */
 } DiffLine;
 
+typedef struct { int btn,col,row; bool release,shift,ctrl; } MouseEvt;
+typedef enum {
+    KEY_NONE=0, KEY_UP,KEY_DOWN,KEY_LEFT,KEY_RIGHT,
+    KEY_PGUP,KEY_PGDN,KEY_HOME,KEY_END,
+    KEY_ENTER,KEY_ESC,KEY_BACKSPACE,KEY_DEL,
+    KEY_TAB,KEY_SHIFT_TAB,
+    KEY_CTRL_A,KEY_CTRL_B,KEY_CTRL_C,KEY_CTRL_D,KEY_CTRL_E,
+    KEY_CTRL_F,KEY_CTRL_K,KEY_CTRL_N,KEY_CTRL_P,
+    KEY_CTRL_U,KEY_CTRL_W,KEY_CTRL_Y,
+    KEY_MOUSE,KEY_CHAR,
+    KEY_F1,KEY_F2,KEY_F3,KEY_F4,KEY_F5
+} KeyType;
+typedef struct { KeyType type; char ch; MouseEvt mouse; } Key;
+
+/* ================================================================
+   GLOBAL STATE
+================================================================ */
 typedef struct {
-    /* Terminal state */
     struct termios orig_termios;
     int rows, cols;
     bool running;
+    int  theme_idx;
 
-    /* Current view */
-    View current_view;
+    /* Vi */
+    ViMode vi_mode;
+    bool   vi_enabled;
+    int    vi_count;
+    bool   vi_gg_pending;
 
-    /* Status */
+    /* View / focus */
+    View      current_view;
+    FocusPane focus;
+
+    /* Changes */
     GitFile files[MAX_FILES];
-    int file_count;
-    int file_sel;
-    int file_scroll;
-    bool show_unstaged;
+    int file_count, file_sel, file_scroll;
 
-    /* Log */
+    /* Log/graph */
     GitCommit commits[MAX_COMMITS];
-    int commit_count;
-    int commit_sel;
-    int commit_scroll;
+    int commit_count, commit_sel, commit_scroll;
 
     /* Diff */
     DiffLine diff_lines[MAX_DIFF_LINES];
-    int diff_count;
-    int diff_scroll;
-    char diff_file[512];
-    bool diff_staged;
+    int diff_count, diff_scroll, diff_hscroll;
+    char diff_title[512];
+    bool diff_staged, diff_sidebyside;
 
     /* Branches */
     GitBranch branches[MAX_BRANCHES];
-    int branch_count;
-    int branch_sel;
-    int branch_scroll;
+    int branch_count, branch_sel, branch_scroll;
 
     /* Stash */
     GitStash stashes[MAX_STASHES];
-    int stash_count;
-    int stash_sel;
+    int stash_count, stash_sel;
 
-    /* Input/prompt */
-    bool in_prompt;
-    char prompt_label[128];
-    char prompt_buf[INPUT_MAX];
-    int prompt_cursor;
+    /* Prompt */
+    bool in_prompt, prompt_obscure;
+    char prompt_label[128], prompt_buf[INPUT_MAX];
+    int  prompt_cursor;
     void (*prompt_cb)(const char *);
 
-    /* Search */
-    bool in_search;
-    char search_buf[INPUT_MAX];
-    int search_cursor;
-
-    /* Status bar message */
-    char status_msg[256];
+    /* Status */
+    char   status_msg[256];
     time_t status_msg_time;
+    bool   status_is_err;
 
-    /* Repo info */
+    /* Repo */
     char branch_name[128];
-    char repo_root[512];
 
-    /* Notification */
-    char notif[256];
-    time_t notif_time;
+    /* Layout */
+    int lw, lh_chg, lh_gph, rx, rw;
 } State;
 
-/* ─── Globals ────────────────────────────────────────────────── */
-static State g;
+static State G;
 static volatile int g_resize = 0;
 
-/* ─── Utility ────────────────────────────────────────────────── */
-static void set_msg(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(g.status_msg, sizeof(g.status_msg), fmt, ap);
-    va_end(ap);
-    g.status_msg_time = time(NULL);
-}
+#define TH (THEMES[G.theme_idx])
 
-static void die(const char *msg) {
-    write(STDOUT_FILENO, NORM_SCREEN SHOW_CURSOR MOUSE_OFF, 
-          strlen(NORM_SCREEN SHOW_CURSOR MOUSE_OFF));
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig_termios);
-    fprintf(stderr, "gitui: %s\n", msg);
-    exit(1);
+/* ================================================================
+   UTIL
+================================================================ */
+static void set_status(bool err, const char *fmt, ...) {
+    va_list ap; va_start(ap,fmt);
+    vsnprintf(G.status_msg,sizeof(G.status_msg),fmt,ap); va_end(ap);
+    G.status_msg_time=time(NULL); G.status_is_err=err;
 }
+#define OK(...)  set_status(false,__VA_ARGS__)
+#define ERR(...) set_status(true, __VA_ARGS__)
 
-/* Run a git command, capture output. Returns malloc'd string or NULL. */
-static char *git_run(const char *cmd) {
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return NULL;
-    
-    size_t cap = 4096, len = 0;
-    char *buf = malloc(cap);
-    if (!buf) { pclose(fp); return NULL; }
-    
-    int c;
-    while ((c = fgetc(fp)) != EOF) {
-        if (len + 2 >= cap) {
-            cap *= 2;
-            char *nb = realloc(buf, cap);
-            if (!nb) { free(buf); pclose(fp); return NULL; }
-            buf = nb;
-        }
-        buf[len++] = (char)c;
-    }
-    buf[len] = '\0';
-    pclose(fp);
-    return buf;
+static int iclamp(int v,int lo,int hi){return v<lo?lo:v>hi?hi:v;}
+static int imin(int a,int b){return a<b?a:b;}
+static int imax(int a,int b){return a>b?a:b;}
+static void strtrim(char *s){int n=(int)strlen(s);while(n>0&&(s[n-1]=='\n'||s[n-1]=='\r'||s[n-1]==' '))s[--n]='\0';}
+
+static char *git_run(const char *cmd){
+    FILE *fp=popen(cmd,"r"); if(!fp)return NULL;
+    size_t cap=8192,len=0; char *buf=malloc(cap); if(!buf){pclose(fp);return NULL;}
+    int c; while((c=fgetc(fp))!=EOF){
+        if(len+2>=cap){cap*=2;char *nb=realloc(buf,cap);if(!nb){free(buf);pclose(fp);return NULL;}buf=nb;}
+        buf[len++]=(char)c;
+    } buf[len]='\0'; pclose(fp); return buf;
 }
-
-/* Run a git command silently (for side effects). Returns exit code. */
-static int git_exec(const char *fmt, ...) {
-    char cmd[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(cmd, sizeof(cmd), fmt, ap);
-    va_end(ap);
-    
-    /* Redirect stderr to /dev/null for silent operation */
-    char full[1200];
-    snprintf(full, sizeof(full), "%s 2>/dev/null", cmd);
+static int git_exec(const char *fmt,...){
+    char cmd[2048]; va_list ap; va_start(ap,fmt); vsnprintf(cmd,sizeof(cmd),fmt,ap); va_end(ap);
+    char full[2200]; snprintf(full,sizeof(full),"%s >/dev/null 2>&1",cmd);
     return system(full);
 }
 
-static void trim_trailing(char *s) {
-    int n = strlen(s);
-    while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == ' '))
-        s[--n] = '\0';
+/* ================================================================
+   TERMINAL
+================================================================ */
+static void term_raw(void){
+    tcgetattr(STDIN_FILENO,&G.orig_termios);
+    struct termios r=G.orig_termios;
+    r.c_lflag&=~(ECHO|ICANON|ISIG|IEXTEN);
+    r.c_iflag&=~(IXON|ICRNL|BRKINT|INPCK|ISTRIP);
+    r.c_oflag&=~OPOST; r.c_cflag|=CS8;
+    r.c_cc[VMIN]=0; r.c_cc[VTIME]=1;
+    tcsetattr(STDIN_FILENO,TCSAFLUSH,&r);
 }
-
-static int clamp(int v, int lo, int hi) {
-    return v < lo ? lo : v > hi ? hi : v;
-}
-
-/* ─── Terminal ───────────────────────────────────────────────── */
-static void term_raw(void) {
-    tcgetattr(STDIN_FILENO, &g.orig_termios);
-    struct termios raw = g.orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
-    raw.c_iflag &= ~(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
-    raw.c_oflag &= ~OPOST;
-    raw.c_cflag |= CS8;
-    raw.c_cc[VMIN]  = 0;
-    raw.c_cc[VTIME] = 1; /* 100ms timeout for non-blocking */
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-}
-
-static void term_restore(void) {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig_termios);
-}
-
-static void get_winsize(void) {
+static void term_restore(void){tcsetattr(STDIN_FILENO,TCSAFLUSH,&G.orig_termios);}
+static void get_winsize(void){
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-        g.cols = 80; g.rows = 24;
-    } else {
-        g.cols = ws.ws_col;
-        g.rows = ws.ws_row;
-    }
+    if(ioctl(STDOUT_FILENO,TIOCGWINSZ,&ws)==-1||!ws.ws_col){G.cols=80;G.rows=24;}
+    else{G.cols=ws.ws_col;G.rows=ws.ws_row;}
 }
 
-static void move_to(int row, int col) {
-    printf(CSI "%d;%dH", row, col);
-}
+static void at(int r,int c){printf(CSI"%d;%dH",r,c);}
+static void cfg(Color c){fg(c.r,c.g,c.b);}
+static void cbg(Color c){bg(c.r,c.g,c.b);}
+static void rst(void){printf(T_RESET);}
 
-static void clear_line(void) {
-    printf(CSI "2K");
-}
-
-static void set_color(const char *color) {
-    printf("%s", color);
-}
-
-/* ─── Signal handling ────────────────────────────────────────── */
-static void sigwinch_handler(int sig) {
-    (void)sig;
-    g_resize = 1;
-}
-
-static void sigint_handler(int sig) {
-    (void)sig;
-    g.running = false;
-}
-
-/* ─── Git data loading ───────────────────────────────────────── */
-static void load_branch(void) {
-    char *out = git_run("git rev-parse --abbrev-ref HEAD 2>/dev/null");
-    if (out) {
-        trim_trailing(out);
-        snprintf(g.branch_name, sizeof(g.branch_name), "%s", out);
-        free(out);
-    } else {
-        snprintf(g.branch_name, sizeof(g.branch_name), "unknown");
-    }
-}
-
-static void load_repo_root(void) {
-    char *out = git_run("git rev-parse --show-toplevel 2>/dev/null");
-    if (out) {
-        trim_trailing(out);
-        snprintf(g.repo_root, sizeof(g.repo_root), "%s", out);
-        free(out);
-    }
-}
-
-static FileStatus parse_xy(char x, char y) {
-    if (x == '?' && y == '?') return FILE_UNTRACKED;
-    if (x == 'A') return FILE_STAGED_NEW;
-    if (x == 'D') return FILE_STAGED_DELETED;
-    if (x == 'R') return FILE_RENAMED;
-    if (x == 'M') return FILE_STAGED_MODIFIED;
-    if (y == 'M') return FILE_MODIFIED;
-    if (y == 'D') return FILE_DELETED;
-    if (x == 'U' || y == 'U') return FILE_CONFLICT;
-    return FILE_MODIFIED;
-}
-
-static void load_status(void) {
-    g.file_count = 0;
-    char *out = git_run("git status --porcelain=v1 -u 2>/dev/null");
-    if (!out) return;
-
-    char *line = out;
-    while (*line && g.file_count < MAX_FILES) {
-        if (strlen(line) < 4) { line = strchr(line, '\n'); if (line) line++; continue; }
-        
-        char x = line[0], y = line[1];
-        char *path_start = line + 3;
-        char *nl = strchr(path_start, '\n');
-        size_t path_len = nl ? (size_t)(nl - path_start) : strlen(path_start);
-        
-        GitFile *f = &g.files[g.file_count];
-        memset(f, 0, sizeof(*f));
-        
-        /* Handle rename: "old -> new" */
-        char path_buf[512];
-        if (path_len >= sizeof(path_buf)) path_len = sizeof(path_buf)-1;
-        memcpy(path_buf, path_start, path_len);
-        path_buf[path_len] = '\0';
-        
-        char *arrow = strstr(path_buf, " -> ");
-        if (arrow) {
-            *arrow = '\0';
-            snprintf(f->orig_path, sizeof(f->orig_path), "%s", path_buf);
-            snprintf(f->path, sizeof(f->path), "%s", arrow + 4);
-        } else {
-            snprintf(f->path, sizeof(f->path), "%s", path_buf);
-        }
-        
-        f->status = parse_xy(x, y);
-        f->staged = (x != ' ' && x != '?' && x != '!');
-        
-        g.file_count++;
-        line = nl ? nl + 1 : line + strlen(line);
-    }
-    free(out);
-    g.file_sel = clamp(g.file_sel, 0, g.file_count > 0 ? g.file_count - 1 : 0);
-}
-
-static void load_log(void) {
-    g.commit_count = 0;
-    /* Format: hash|author|date|refs|subject */
-    char *out = git_run(
-        "git log --pretty=format:'%h|%an|%ar|%D|%s' -n 200 2>/dev/null");
-    if (!out) return;
-
-    char *line = out;
-    while (*line && g.commit_count < MAX_COMMITS) {
-        char *nl = strchr(line, '\n');
-        size_t len = nl ? (size_t)(nl - line) : strlen(line);
-        if (len == 0) { line = nl ? nl+1 : line+strlen(line); continue; }
-
-        char buf[1024];
-        if (len >= sizeof(buf)) len = sizeof(buf)-1;
-        memcpy(buf, line, len);
-        buf[len] = '\0';
-
-        /* Remove surrounding single quotes if present */
-        char *p = buf;
-        if (*p == '\'') p++;
-        size_t plen = strlen(p);
-        if (plen > 0 && p[plen-1] == '\'') p[plen-1] = '\0';
-
-        GitCommit *c = &g.commits[g.commit_count];
-        memset(c, 0, sizeof(*c));
-
-        char *tok = strtok(p, "|");
-        if (tok) snprintf(c->hash,    sizeof(c->hash),    "%s", tok);
-        tok = strtok(NULL, "|");
-        if (tok) snprintf(c->author,  sizeof(c->author),  "%s", tok);
-        tok = strtok(NULL, "|");
-        if (tok) snprintf(c->date,    sizeof(c->date),    "%s", tok);
-        tok = strtok(NULL, "|");
-        if (tok) snprintf(c->refs,    sizeof(c->refs),    "%s", tok);
-        tok = strtok(NULL, "");
-        if (tok) {
-            /* remove trailing quote */
-            size_t tl = strlen(tok);
-            if (tl > 0 && tok[tl-1] == '\'') tok[tl-1] = '\0';
-            snprintf(c->subject, sizeof(c->subject), "%s", tok);
-        }
-
-        g.commit_count++;
-        line = nl ? nl+1 : line+strlen(line);
-    }
-    free(out);
-    g.commit_sel = clamp(g.commit_sel, 0, g.commit_count > 0 ? g.commit_count-1 : 0);
-}
-
-static void load_branches(void) {
-    g.branch_count = 0;
-    char *out = git_run(
-        "git branch -vv --format='%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)' 2>/dev/null");
-    if (!out) return;
-
-    char *line = out;
-    while (*line && g.branch_count < MAX_BRANCHES) {
-        char *nl = strchr(line, '\n');
-        size_t len = nl ? (size_t)(nl-line) : strlen(line);
-        if (len == 0) { line = nl ? nl+1 : line+strlen(line); continue; }
-
-        char buf[512];
-        if (len >= sizeof(buf)) len = sizeof(buf)-1;
-        memcpy(buf, line, len);
-        buf[len] = '\0';
-
-        GitBranch *b = &g.branches[g.branch_count];
-        memset(b, 0, sizeof(*b));
-
-        char *tok = strtok(buf, "|");
-        if (tok) b->is_current = (tok[0] == '*');
-        tok = strtok(NULL, "|");
-        if (tok) {
-            snprintf(b->name, sizeof(b->name), "%s", tok);
-            b->is_remote = (strncmp(tok, "remotes/", 8) == 0 ||
-                            strchr(tok, '/') != NULL);
-        }
-        tok = strtok(NULL, "|");
-        if (tok) snprintf(b->upstream, sizeof(b->upstream), "%s", tok);
-        tok = strtok(NULL, "");
-        if (tok) {
-            /* parse [ahead X, behind Y] */
-            char *ah = strstr(tok, "ahead ");
-            char *bh = strstr(tok, "behind ");
-            if (ah) b->ahead  = atoi(ah + 6);
-            if (bh) b->behind = atoi(bh + 7);
-        }
-
-        g.branch_count++;
-        line = nl ? nl+1 : line+strlen(line);
-    }
-    free(out);
-
-    /* Also load remote branches */
-    char *out2 = git_run(
-        "git branch -r --format='%(refname:short)' 2>/dev/null");
-    if (out2) {
-        line = out2;
-        while (*line && g.branch_count < MAX_BRANCHES) {
-            char *nl = strchr(line, '\n');
-            size_t len = nl ? (size_t)(nl-line) : strlen(line);
-            if (len == 0) { line = nl ? nl+1 : line+strlen(line); continue; }
-            char buf[256];
-            if (len >= sizeof(buf)) len = sizeof(buf)-1;
-            memcpy(buf, line, len);
-            buf[len] = '\0';
-            trim_trailing(buf);
-            if (strstr(buf, "HEAD")) { line = nl ? nl+1 : line+strlen(line); continue; }
-            /* check not already in list */
-            bool found = false;
-            for (int i = 0; i < g.branch_count; i++)
-                if (strcmp(g.branches[i].name, buf) == 0) { found = true; break; }
-            if (!found) {
-                GitBranch *b = &g.branches[g.branch_count++];
-                memset(b, 0, sizeof(*b));
-                snprintf(b->name, sizeof(b->name), "%s", buf);
-                b->is_remote = true;
-            }
-            line = nl ? nl+1 : line+strlen(line);
-        }
-        free(out2);
-    }
-
-    g.branch_sel = clamp(g.branch_sel, 0, g.branch_count > 0 ? g.branch_count-1 : 0);
-}
-
-static void load_stash(void) {
-    g.stash_count = 0;
-    char *out = git_run("git stash list --format='%gd|%h|%s' 2>/dev/null");
-    if (!out) return;
-
-    char *line = out;
-    while (*line && g.stash_count < MAX_STASHES) {
-        char *nl = strchr(line, '\n');
-        size_t len = nl ? (size_t)(nl-line) : strlen(line);
-        if (len == 0) { line = nl ? nl+1 : line+strlen(line); continue; }
-        char buf[512];
-        if (len >= sizeof(buf)) len = sizeof(buf)-1;
-        memcpy(buf, line, len);
-        buf[len] = '\0';
-
-        GitStash *s = &g.stashes[g.stash_count];
-        memset(s, 0, sizeof(*s));
-
-        char *tok = strtok(buf, "|");
-        if (tok) {
-            /* stash@{N} -> extract N */
-            char *lb = strchr(tok, '{');
-            s->index = lb ? atoi(lb+1) : g.stash_count;
-        }
-        tok = strtok(NULL, "|");
-        if (tok) snprintf(s->hash, sizeof(s->hash), "%s", tok);
-        tok = strtok(NULL, "");
-        if (tok) snprintf(s->message, sizeof(s->message), "%s", tok);
-
-        g.stash_count++;
-        line = nl ? nl+1 : line+strlen(line);
-    }
-    free(out);
-    g.stash_sel = clamp(g.stash_sel, 0, g.stash_count > 0 ? g.stash_count-1 : 0);
-}
-
-static void load_diff(const char *filepath, bool staged) {
-    g.diff_count = 0;
-    if (!filepath || !filepath[0]) return;
-
-    char cmd[1024];
-    if (staged)
-        snprintf(cmd, sizeof(cmd), "git diff --cached -- '%s' 2>/dev/null", filepath);
-    else
-        snprintf(cmd, sizeof(cmd), "git diff -- '%s' 2>/dev/null", filepath);
-
-    char *out = git_run(cmd);
-    
-    /* If untracked, show file content */
-    if (!out || out[0] == '\0') {
-        free(out);
-        snprintf(cmd, sizeof(cmd), "cat '%s' 2>/dev/null | head -200", filepath);
-        out = git_run(cmd);
-        if (out && out[0]) {
-            char *line = out;
-            int lnum = 1;
-            while (*line && g.diff_count < MAX_DIFF_LINES) {
-                char *nl = strchr(line, '\n');
-                size_t len = nl ? (size_t)(nl-line) : strlen(line);
-                DiffLine *dl = &g.diff_lines[g.diff_count++];
-                snprintf(dl->line, sizeof(dl->line), "%4d  %.*s", lnum++, (int)len, line);
-                dl->type = 1; /* show as added */
-                line = nl ? nl+1 : line+strlen(line);
-            }
-        }
-        free(out);
-        return;
-    }
-
-    char *line = out;
-    while (*line && g.diff_count < MAX_DIFF_LINES) {
-        char *nl = strchr(line, '\n');
-        size_t len = nl ? (size_t)(nl-line) : strlen(line);
-        DiffLine *dl = &g.diff_lines[g.diff_count];
-        if (len >= LINE_MAX_LEN) len = LINE_MAX_LEN-1;
-        memcpy(dl->line, line, len);
-        dl->line[len] = '\0';
-
-        if (dl->line[0] == '+') dl->type = 1;
-        else if (dl->line[0] == '-') dl->type = 2;
-        else if (dl->line[0] == '@') dl->type = 3;
-        else dl->type = 0;
-
-        g.diff_count++;
-        line = nl ? nl+1 : line+strlen(line);
-    }
-    free(out);
-    g.diff_scroll = 0;
-}
-
-/* ─── Drawing helpers ────────────────────────────────────────── */
-
-static void draw_hline(int row, int col, int width, const char *ch) {
-    move_to(row, col);
-    for (int i = 0; i < width; i++) printf("%s", ch);
-}
-
-static void draw_box_title(int row, int col, int width, const char *title, bool active) {
-    move_to(row, col);
-    if (active) printf(BOLD FG_BRIGHT_CYAN);
-    else printf(FG_BRIGHT_BLACK);
-    printf("┌");
-    int tlen = (int)strlen(title) + 2;
-    int left = (width - 2 - tlen) / 2;
-    for (int i = 0; i < left && i < width-2; i++) printf("─");
-    printf(" %s " RESET, title);
-    if (active) printf(BOLD FG_BRIGHT_CYAN);
-    else printf(FG_BRIGHT_BLACK);
-    int right = width - 2 - left - tlen;
-    for (int i = 0; i < right; i++) printf("─");
-    printf("┐" RESET);
-}
-
-static void draw_box_bottom(int row, int col, int width) {
-    move_to(row, col);
-    printf(FG_BRIGHT_BLACK "└");
-    for (int i = 0; i < width-2; i++) printf("─");
-    printf("┘" RESET);
-}
-
-static void draw_vline(int row, int col, int height) {
-    for (int i = 0; i < height; i++) {
-        move_to(row+i, col);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-    }
-}
-
-/* Truncate and pad string to width */
-static void print_padded(const char *s, int width) {
-    int len = 0;
-    const char *p = s;
-    while (*p && len < width) {
-        /* Skip ANSI sequences for length counting */
-        if (*p == '\x1b') {
-            while (*p && *p != 'm') p++;
-            if (*p) p++;
+/* Print string padded/truncated to exactly w visible chars */
+static void ppad(const char *s,int w){
+    if(w<=0)return;
+    int vis=0;
+    while(*s&&vis<w){
+        if(*s=='\x1b'&&s[1]=='['){
+            /* pass ANSI escape through without counting */
+            while(*s&&*s!='m'){putchar(*s++);} if(*s){putchar(*s++);}
             continue;
         }
-        len++; p++;
+        putchar(*s++); vis++;
     }
-    printf("%.*s", (int)(p - s), s);
-    for (int i = len; i < width; i++) printf(" ");
+    while(vis<w){putchar(' ');vis++;}
 }
 
-static const char *file_status_icon(FileStatus s, bool staged) {
-    if (s == FILE_UNTRACKED)       return "?";
-    if (s == FILE_CONFLICT)        return "!";
-    if (!staged) {
-        if (s == FILE_MODIFIED)    return "M";
-        if (s == FILE_DELETED)     return "D";
-    } else {
-        if (s == FILE_STAGED_NEW)  return "A";
-        if (s == FILE_STAGED_MODIFIED) return "M";
-        if (s == FILE_STAGED_DELETED)  return "D";
-        if (s == FILE_RENAMED)     return "R";
-    }
-    return " ";
+/* ================================================================
+   LAYOUT
+================================================================ */
+static void layout(void){
+    G.lw=imax(26,imin(48,G.cols*32/100));
+    G.rx=G.lw+1; G.rw=G.cols-G.lw;
+    int ch=G.rows-2;
+    G.lh_chg=imax(5,ch*58/100);
+    G.lh_gph=ch-G.lh_chg;
+    if(G.lh_gph<4){G.lh_gph=4;G.lh_chg=ch-4;}
 }
 
-static const char *file_status_color(FileStatus s, bool staged) {
-    if (s == FILE_UNTRACKED)   return FG_BRIGHT_BLACK;
-    if (s == FILE_CONFLICT)    return FG_BRIGHT_RED BOLD;
-    if (staged) return FG_BRIGHT_GREEN;
-    return FG_BRIGHT_RED;
+/* ================================================================
+   SIGNAL HANDLERS
+================================================================ */
+static void sig_winch(int s){(void)s;g_resize=1;}
+static void sig_int(int s){(void)s;G.running=false;}
+
+/* ================================================================
+   DATA LOADING
+================================================================ */
+static void load_branch(void){
+    char *o=git_run("git rev-parse --abbrev-ref HEAD 2>/dev/null");
+    if(o){strtrim(o);snprintf(G.branch_name,sizeof(G.branch_name),"%s",o);free(o);}
+    else snprintf(G.branch_name,sizeof(G.branch_name),"(unknown)");
 }
-
-/* ─── View: Status ───────────────────────────────────────────── */
-
-/* Count staged/unstaged */
-static void status_counts(int *staged_out, int *unstaged_out) {
-    int s = 0, u = 0;
-    for (int i = 0; i < g.file_count; i++) {
-        if (g.files[i].staged) s++;
-        else u++;
-    }
-    if (staged_out) *staged_out = s;
-    if (unstaged_out) *unstaged_out = u;
+static FileStatus parse_xy(char x,char y){
+    if(x=='?'&&y=='?')return FS_UNTRACKED;
+    if(x=='A')return FS_STAGED_NEW;
+    if(x=='D')return FS_STAGED_DEL;
+    if(x=='R')return FS_RENAMED;
+    if(x=='C')return FS_COPIED;
+    if(x=='M')return FS_STAGED_MODIFY;
+    if(y=='M')return FS_MODIFIED;
+    if(y=='D')return FS_DELETED;
+    if(x=='U'||y=='U')return FS_CONFLICT;
+    return FS_MODIFIED;
 }
-
-static void draw_status(int top, int left, int height, int width) {
-    int staged_count, unstaged_count;
-    status_counts(&staged_count, &unstaged_count);
-
-    /* Split pane: top=staged, bottom=unstaged */
-    int split = height / 2;
-
-    /* Staged section */
-    {
-        char title[64];
-        snprintf(title, sizeof(title), "Staged (%d)", staged_count);
-        bool active = (g.current_view == VIEW_STATUS);
-        draw_box_title(top, left, width, title, active);
-
-        int row = top + 1;
-        int lim = top + split - 1;
-        int idx = 0, shown = 0;
-
-        for (int i = 0; i < g.file_count && row < lim; i++) {
-            if (!g.files[i].staged) continue;
-            bool sel = (g.file_sel == i);
-            move_to(row, left);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-
-            if (sel) printf(BG_BRIGHT_BLACK BOLD);
-            
-            const char *icon  = file_status_icon(g.files[i].status, true);
-            const char *color = file_status_color(g.files[i].status, true);
-            printf(" %s%s" RESET, color, icon);
-            if (sel) printf(BG_BRIGHT_BLACK);
-            printf(" ");
-            
-            int fw = width - 6;
-            char display[512];
-            if (g.files[i].orig_path[0])
-                snprintf(display, sizeof(display), "%s → %s", g.files[i].orig_path, g.files[i].path);
-            else
-                snprintf(display, sizeof(display), "%s", g.files[i].path);
-            print_padded(display, fw);
-            printf(RESET);
-
-            move_to(row, left + width - 1);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-            row++; shown++; idx++;
-        }
-        /* Fill empty rows */
-        while (row < lim) {
-            move_to(row, left);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-            move_to(row, left + width - 1);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-            row++;
-        }
-        draw_box_bottom(top + split - 1, left, width);
+static void load_status(void){
+    G.file_count=0;
+    char *o=git_run("git status --porcelain=v1 -u 2>/dev/null"); if(!o)return;
+    char *line=o;
+    while(*line&&G.file_count<MAX_FILES){
+        if(strlen(line)<4){char *nl=strchr(line,'\n');line=nl?nl+1:line+strlen(line);continue;}
+        char x=line[0],y=line[1];
+        char *ps=line+3; char *nl=strchr(ps,'\n');
+        size_t plen=nl?(size_t)(nl-ps):strlen(ps);
+        char pb[512]; if(plen>=sizeof(pb))plen=sizeof(pb)-1;
+        memcpy(pb,ps,plen); pb[plen]='\0';
+        GitFile *f=&G.files[G.file_count++]; memset(f,0,sizeof(*f));
+        char *arrow=strstr(pb," -> ");
+        if(arrow){*arrow='\0';snprintf(f->orig,sizeof(f->orig),"%s",pb);snprintf(f->path,sizeof(f->path),"%s",arrow+4);}
+        else snprintf(f->path,sizeof(f->path),"%s",pb);
+        f->st=parse_xy(x,y);
+        f->staged=(x!=' '&&x!='?'&&x!='!');
+        line=nl?nl+1:line+strlen(line);
     }
-
-    /* Unstaged section */
-    {
-        char title[64];
-        snprintf(title, sizeof(title), "Unstaged (%d)", unstaged_count);
-        bool active = (g.current_view == VIEW_STATUS);
-        draw_box_title(top + split, left, width, title, active);
-
-        int row = top + split + 1;
-        int lim = top + height - 1;
-
-        for (int i = 0; i < g.file_count && row < lim; i++) {
-            if (g.files[i].staged) continue;
-            bool sel = (g.file_sel == i);
-            move_to(row, left);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-
-            if (sel) printf(BG_BRIGHT_BLACK BOLD);
-
-            const char *icon  = file_status_icon(g.files[i].status, false);
-            const char *color = file_status_color(g.files[i].status, false);
-            printf(" %s%s" RESET, color, icon);
-            if (sel) printf(BG_BRIGHT_BLACK);
-            printf(" ");
-
-            int fw = width - 6;
-            print_padded(g.files[i].path, fw);
-            printf(RESET);
-
-            move_to(row, left + width - 1);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-            row++;
-        }
-        while (row < lim) {
-            move_to(row, left);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-            move_to(row, left + width - 1);
-            printf(FG_BRIGHT_BLACK "│" RESET);
-            row++;
-        }
-        draw_box_bottom(top + height - 1, left, width);
-    }
+    free(o);
+    G.file_sel=iclamp(G.file_sel,0,G.file_count>0?G.file_count-1:0);
 }
-
-/* ─── View: Log ──────────────────────────────────────────────── */
-static void draw_log(int top, int left, int height, int width) {
-    draw_box_title(top, left, width, "Commit Log", g.current_view == VIEW_LOG);
-
-    int row = top + 1;
-    int lim = top + height - 1;
-    int visible = lim - row;
-
-    /* Auto-scroll */
-    if (g.commit_sel < g.commit_scroll)
-        g.commit_scroll = g.commit_sel;
-    if (g.commit_sel >= g.commit_scroll + visible)
-        g.commit_scroll = g.commit_sel - visible + 1;
-
-    for (int i = g.commit_scroll; i < g.commit_count && row < lim; i++, row++) {
-        bool sel = (g.commit_sel == i);
-        GitCommit *c = &g.commits[i];
-
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-
-        if (sel) printf(BG_BRIGHT_BLACK BOLD);
-
-        /* Hash */
-        printf(" " FG_BRIGHT_YELLOW "%s" RESET, c->hash);
-        if (sel) printf(BG_BRIGHT_BLACK);
-        printf(" ");
-
-        /* Refs (branch labels) */
-        if (c->refs[0]) {
-            printf(FG_BRIGHT_CYAN "(%s) " RESET, c->refs);
-            if (sel) printf(BG_BRIGHT_BLACK);
+static void load_log(void){
+    G.commit_count=0;
+    char *graph_o=git_run("git log --oneline --graph --decorate=short -n 300 2>/dev/null");
+    char *data_o =git_run("git log --format='%h\x01%an\x01%ae\x01%ar\x01%D\x01%s' -n 300 2>/dev/null");
+    if(data_o){
+        char *line=data_o;
+        while(*line&&G.commit_count<MAX_COMMITS){
+            char *nl=strchr(line,'\n');
+            size_t len=nl?(size_t)(nl-line):strlen(line);
+            if(!len){line=nl?nl+1:line+strlen(line);continue;}
+            char buf[1024]; if(len>=sizeof(buf))len=sizeof(buf)-1;
+            memcpy(buf,line,len); buf[len]='\0';
+            GitCommit *c=&G.commits[G.commit_count]; memset(c,0,sizeof(*c));
+            char *tok=strtok(buf,"\x01");
+            if(tok)snprintf(c->hash,sizeof(c->hash),"%s",tok);
+            tok=strtok(NULL,"\x01"); if(tok)snprintf(c->author,sizeof(c->author),"%s",tok);
+            tok=strtok(NULL,"\x01"); if(tok)snprintf(c->email,sizeof(c->email),"%s",tok);
+            tok=strtok(NULL,"\x01"); if(tok)snprintf(c->date,sizeof(c->date),"%s",tok);
+            tok=strtok(NULL,"\x01"); if(tok)snprintf(c->refs,sizeof(c->refs),"%s",tok);
+            tok=strtok(NULL,""); if(tok){strtrim(tok);snprintf(c->subject,sizeof(c->subject),"%s",tok);}
+            G.commit_count++;
+            line=nl?nl+1:line+strlen(line);
         }
-
-        /* Author */
-        int author_w = 12;
-        printf(FG_BRIGHT_MAGENTA);
-        print_padded(c->author, author_w);
-        printf(RESET);
-        if (sel) printf(BG_BRIGHT_BLACK);
-        printf(" ");
-
-        /* Date */
-        printf(FG_BRIGHT_BLACK);
-        int date_w = 12;
-        print_padded(c->date, date_w);
-        printf(RESET);
-        if (sel) printf(BG_BRIGHT_BLACK);
-        printf(" ");
-
-        /* Subject */
-        int used = 1 + 8 + 1 + 1; /* borders + hash + space + space */
-        if (c->refs[0]) used += strlen(c->refs) + 4;
-        used += author_w + 1 + date_w + 1;
-        int subj_w = width - 2 - used;
-        if (subj_w < 4) subj_w = 4;
-        print_padded(c->subject, subj_w);
-        printf(RESET);
-
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
+        free(data_o);
     }
-
-    /* Fill */
-    while (row < lim) {
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        row++;
-    }
-    draw_box_bottom(top + height - 1, left, width);
-}
-
-/* ─── View: Diff ─────────────────────────────────────────────── */
-static void draw_diff(int top, int left, int height, int width) {
-    char title[256];
-    if (g.diff_file[0])
-        snprintf(title, sizeof(title), "Diff: %s%s", 
-                 g.diff_file, g.diff_staged ? " (staged)" : "");
-    else
-        snprintf(title, sizeof(title), "Diff");
-
-    draw_box_title(top, left, width, title, g.current_view == VIEW_DIFF);
-
-    int row = top + 1;
-    int lim = top + height - 1;
-    int visible = lim - row;
-
-    if (g.diff_scroll < 0) g.diff_scroll = 0;
-    if (g.diff_scroll > g.diff_count - visible && g.diff_count > visible)
-        g.diff_scroll = g.diff_count - visible;
-
-    for (int i = g.diff_scroll; i < g.diff_count && row < lim; i++, row++) {
-        DiffLine *dl = &g.diff_lines[i];
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET " ");
-
-        switch (dl->type) {
-            case 1: printf(FG_BRIGHT_GREEN);  break;
-            case 2: printf(FG_BRIGHT_RED);    break;
-            case 3: printf(FG_BRIGHT_CYAN BOLD); break;
-            default: printf(RESET); break;
-        }
-
-        /* Tab expand and truncate */
-        char expanded[LINE_MAX_LEN*2];
-        int ei = 0, col = 0;
-        int max_w = width - 4;
-        for (int ci = 0; dl->line[ci] && col < max_w; ci++) {
-            if (dl->line[ci] == '\t') {
-                int spaces = 4 - (col % 4);
-                for (int s = 0; s < spaces && col < max_w; s++, col++, ei++)
-                    expanded[ei] = ' ';
-            } else {
-                expanded[ei++] = dl->line[ci];
-                col++;
+    if(graph_o){
+        int ci=0; char *line=graph_o;
+        while(*line&&ci<G.commit_count){
+            char *nl=strchr(line,'\n');
+            size_t len=nl?(size_t)(nl-line):strlen(line);
+            char buf[256]; if(len>=sizeof(buf))len=sizeof(buf)-1;
+            memcpy(buf,line,len); buf[len]='\0';
+            char *star=strchr(buf,'*');
+            if(star){
+                int gc=(int)(star-buf);
+                int gn=imin(GRAPH_COLS,gc+3);
+                snprintf(G.commits[ci].graph,sizeof(G.commits[ci].graph),"%.*s",gn,buf);
+                G.commits[ci].graph_col=gc;
+                ci++;
             }
+            line=nl?nl+1:line+strlen(line);
         }
-        expanded[ei] = '\0';
-
-        print_padded(expanded, max_w);
-        printf(RESET);
-
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
+        free(graph_o);
     }
-
-    /* Scrollbar */
-    if (g.diff_count > visible && visible > 2) {
-        int bar_h = (visible * visible) / g.diff_count;
-        if (bar_h < 1) bar_h = 1;
-        int bar_pos = (g.diff_scroll * (visible - bar_h)) / 
-                      (g.diff_count - visible + 1);
-        for (int i = 0; i < visible; i++) {
-            move_to(top + 1 + i, left + width - 1);
-            if (i >= bar_pos && i < bar_pos + bar_h)
-                printf(FG_BRIGHT_CYAN "█" RESET);
-            else
-                printf(FG_BRIGHT_BLACK "│" RESET);
+    G.commit_sel=iclamp(G.commit_sel,0,G.commit_count>0?G.commit_count-1:0);
+}
+static void load_branches(void){
+    G.branch_count=0;
+    char *o=git_run("git branch -vv --format='%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)' 2>/dev/null");
+    if(o){
+        char *line=o;
+        while(*line&&G.branch_count<MAX_BRANCHES){
+            char *nl=strchr(line,'\n');
+            size_t len=nl?(size_t)(nl-line):strlen(line);
+            if(!len){line=nl?nl+1:line+strlen(line);continue;}
+            char buf[512]; if(len>=sizeof(buf))len=sizeof(buf)-1;
+            memcpy(buf,line,len); buf[len]='\0';
+            GitBranch *b=&G.branches[G.branch_count++]; memset(b,0,sizeof(*b));
+            char *tok=strtok(buf,"|"); if(tok)b->is_current=tok[0]=='*';
+            tok=strtok(NULL,"|"); if(tok)snprintf(b->name,sizeof(b->name),"%s",tok);
+            tok=strtok(NULL,"|"); if(tok)snprintf(b->upstream,sizeof(b->upstream),"%s",tok);
+            tok=strtok(NULL,""); if(tok){
+                char *ah=strstr(tok,"ahead ");  if(ah)b->ahead=atoi(ah+6);
+                char *bh=strstr(tok,"behind "); if(bh)b->behind=atoi(bh+7);
+            }
+            line=nl?nl+1:line+strlen(line);
         }
+        free(o);
     }
-
-    /* Fill */
-    while (row < lim) {
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        row++;
-    }
-    draw_box_bottom(top + height - 1, left, width);
-}
-
-/* ─── View: Branches ─────────────────────────────────────────── */
-static void draw_branches(int top, int left, int height, int width) {
-    draw_box_title(top, left, width, "Branches", g.current_view == VIEW_BRANCHES);
-
-    int row = top + 1, lim = top + height - 1;
-    int visible = lim - row;
-
-    if (g.branch_sel < g.branch_scroll) g.branch_scroll = g.branch_sel;
-    if (g.branch_sel >= g.branch_scroll + visible)
-        g.branch_scroll = g.branch_sel - visible + 1;
-
-    for (int i = g.branch_scroll; i < g.branch_count && row < lim; i++, row++) {
-        GitBranch *b = &g.branches[i];
-        bool sel = (g.branch_sel == i);
-
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        if (sel) printf(BG_BRIGHT_BLACK BOLD);
-
-        /* Current marker */
-        if (b->is_current) printf(FG_BRIGHT_GREEN " * " RESET);
-        else printf("   ");
-        if (sel) printf(BG_BRIGHT_BLACK);
-
-        /* Remote/local icon */
-        if (b->is_remote) printf(FG_BRIGHT_MAGENTA "⬡ " RESET);
-        else printf(FG_BRIGHT_BLUE "⬢ " RESET);
-        if (sel) printf(BG_BRIGHT_BLACK);
-
-        /* Name */
-        int name_w = width - 20;
-        if (name_w < 8) name_w = 8;
-        print_padded(b->name, name_w);
-        printf(RESET);
-
-        /* Ahead/behind */
-        if (b->ahead || b->behind) {
-            printf(FG_BRIGHT_YELLOW " ↑%d↓%d" RESET, b->ahead, b->behind);
-        } else if (b->upstream[0]) {
-            printf(FG_BRIGHT_BLACK " ✓" RESET);
+    char *o2=git_run("git branch -r --format='%(refname:short)' 2>/dev/null");
+    if(o2){
+        char *line=o2;
+        while(*line&&G.branch_count<MAX_BRANCHES){
+            char *nl=strchr(line,'\n');
+            size_t len=nl?(size_t)(nl-line):strlen(line);
+            if(!len){line=nl?nl+1:line+strlen(line);continue;}
+            char buf[256]; if(len>=sizeof(buf))len=sizeof(buf)-1;
+            memcpy(buf,line,len); buf[len]='\0'; strtrim(buf);
+            if(strstr(buf,"HEAD")){line=nl?nl+1:line+strlen(line);continue;}
+            bool found=false;
+            for(int i=0;i<G.branch_count;i++) if(strcmp(G.branches[i].name,buf)==0){found=true;break;}
+            if(!found){GitBranch *b=&G.branches[G.branch_count++];memset(b,0,sizeof(*b));snprintf(b->name,sizeof(b->name),"%s",buf);b->is_remote=true;}
+            line=nl?nl+1:line+strlen(line);
         }
-
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
+        free(o2);
     }
-    while (row < lim) {
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        row++;
+    G.branch_sel=iclamp(G.branch_sel,0,G.branch_count>0?G.branch_count-1:0);
+}
+static void load_stash(void){
+    G.stash_count=0;
+    char *o=git_run("git stash list --format='%gd|%h|%s' 2>/dev/null"); if(!o)return;
+    char *line=o;
+    while(*line&&G.stash_count<MAX_STASHES){
+        char *nl=strchr(line,'\n');
+        size_t len=nl?(size_t)(nl-line):strlen(line);
+        if(!len){line=nl?nl+1:line+strlen(line);continue;}
+        char buf[512]; if(len>=sizeof(buf))len=sizeof(buf)-1;
+        memcpy(buf,line,len); buf[len]='\0';
+        GitStash *s=&G.stashes[G.stash_count++]; memset(s,0,sizeof(*s));
+        char *tok=strtok(buf,"|"); if(tok){char *lb=strchr(tok,'{');s->index=lb?atoi(lb+1):0;}
+        tok=strtok(NULL,"|"); if(tok)snprintf(s->hash,sizeof(s->hash),"%s",tok);
+        tok=strtok(NULL,""); if(tok)snprintf(s->message,sizeof(s->message),"%s",tok);
+        line=nl?nl+1:line+strlen(line);
     }
-    draw_box_bottom(top + height - 1, left, width);
+    free(o);
+    G.stash_sel=iclamp(G.stash_sel,0,G.stash_count>0?G.stash_count-1:0);
 }
 
-/* ─── View: Stash ────────────────────────────────────────────── */
-static void draw_stash(int top, int left, int height, int width) {
-    char title[64];
-    snprintf(title, sizeof(title), "Stash (%d)", g.stash_count);
-    draw_box_title(top, left, width, title, g.current_view == VIEW_STASH);
-
-    int row = top + 1, lim = top + height - 1;
-
-    if (g.stash_count == 0) {
-        move_to(top + height/2, left + width/2 - 6);
-        printf(FG_BRIGHT_BLACK "No stashes" RESET);
-    }
-
-    for (int i = 0; i < g.stash_count && row < lim; i++, row++) {
-        GitStash *s = &g.stashes[i];
-        bool sel = (g.stash_sel == i);
-
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        if (sel) printf(BG_BRIGHT_BLACK BOLD);
-
-        printf(" " FG_BRIGHT_YELLOW "stash@{%d}" RESET, s->index);
-        if (sel) printf(BG_BRIGHT_BLACK);
-        printf(" ");
-
-        int msg_w = width - 14;
-        print_padded(s->message, msg_w);
-        printf(RESET);
-
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-    }
-    while (row < lim) {
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        row++;
-    }
-    draw_box_bottom(top + height - 1, left, width);
-}
-
-/* ─── View: Help ─────────────────────────────────────────────── */
-static void draw_help(int top, int left, int height, int width) {
-    draw_box_title(top, left, width, "Help & Keybindings", true);
-
-    static const char *keys[] = {
-        "Navigation",
-        "  j/k / ↑↓   Move selection up/down",
-        "  h/l         Switch view panes",
-        "  Tab         Cycle views",
-        "  g/G         Jump to top/bottom",
-        "  PgUp/PgDn   Scroll diff/log page",
-        "",
-        "Status View",
-        "  Space       Stage/unstage file",
-        "  a           Stage all files",
-        "  u           Unstage all files",
-        "  Enter       Open diff for file",
-        "  d           Delete/discard file",
-        "",
-        "Log View",
-        "  Enter       Show commit diff",
-        "  y           Copy commit hash",
-        "",
-        "Branch View",
-        "  Enter       Checkout branch",
-        "  n           Create new branch",
-        "  D           Delete branch",
-        "",
-        "Stash View",
-        "  Enter       Apply stash",
-        "  D           Drop stash",
-        "  p           Pop stash",
-        "",
-        "Global",
-        "  c           Commit (staged changes)",
-        "  P           Push to remote",
-        "  f           Fetch/pull",
-        "  s           Stash changes",
-        "  R           Refresh/reload",
-        "  /           Search (in log)",
-        "  q / Esc     Go back / quit",
-        "  ?           Toggle this help",
-        NULL
-    };
-
-    int row = top + 1, lim = top + height - 1;
-    for (int i = 0; keys[i] && row < lim; i++, row++) {
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET "  ");
-        if (keys[i][0] && keys[i][strlen(keys[i])-1] == '\0') {}
-        
-        bool is_header = (strlen(keys[i]) > 0 && keys[i][0] != ' ' && keys[i][0] != '\0');
-        if (is_header && strlen(keys[i]) > 0) printf(BOLD FG_BRIGHT_CYAN);
-        
-        int w = width - 5;
-        print_padded(keys[i], w);
-        printf(RESET);
-
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-    }
-    while (row < lim) {
-        move_to(row, left);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        move_to(row, left + width - 1);
-        printf(FG_BRIGHT_BLACK "│" RESET);
-        row++;
-    }
-    draw_box_bottom(top + height - 1, left, width);
-}
-
-/* ─── Tab bar ────────────────────────────────────────────────── */
-static void draw_tabbar(void) {
-    static const char *tab_names[] = {
-        "Status", "Log", "Diff", "Branches", "Stash", "Help"
-    };
-    static const char *tab_keys[] = {
-        "1", "2", "3", "4", "5", "?"
-    };
-
-    move_to(1, 1);
-    printf(BG_BLACK);
-
-    /* Left: app name */
-    printf(BOLD FG_BRIGHT_CYAN " ⎇ gitui " RESET);
-    printf(FG_BRIGHT_BLACK "│" RESET);
-
-    for (int i = 0; i < (int)(sizeof(tab_names)/sizeof(tab_names[0])); i++) {
-        if (i == (int)g.current_view) {
-            printf(BOLD BG_BRIGHT_BLACK FG_BRIGHT_WHITE " %s[%s] " RESET,
-                   tab_names[i], tab_keys[i]);
+/* Diff parsing */
+static void parse_diff(const char *raw){
+    G.diff_count=0; if(!raw||!raw[0])return;
+    const char *line=raw;
+    int old_lno=0,new_lno=0;
+    while(*line&&G.diff_count<MAX_DIFF_LINES){
+        const char *nl=strchr(line,'\n');
+        size_t len=nl?(size_t)(nl-line):strlen(line);
+        DiffLine *dl=&G.diff_lines[G.diff_count]; memset(dl,0,sizeof(*dl));
+        char lb[LINE_MAX_LEN]; if(len>=LINE_MAX_LEN)len=LINE_MAX_LEN-1;
+        memcpy(lb,line,len); lb[len]='\0';
+        if(lb[0]=='+'&&lb[1]=='+'&&lb[2]=='+'){
+            dl->type=4; snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
+        } else if(lb[0]=='-'&&lb[1]=='-'&&lb[2]=='-'){
+            dl->type=4; snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb);
+        } else if(lb[0]=='@'){
+            dl->type=3;
+            snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
+            snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb);
+            int om=0,nm=0;
+            sscanf(lb,"@@ -%d",&om);
+            sscanf(lb,"@@ -%*d,%*d +%d",&nm);
+            if(!om)sscanf(lb,"@@ -%d,",&om);
+            if(!nm)sscanf(lb,"@@ -%*d +%d",&nm);
+            old_lno=om>0?om:1; new_lno=nm>0?nm:1;
+        } else if(lb[0]=='+'){
+            dl->type=1; dl->new_lno=new_lno++;
+            snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb+1);
+        } else if(lb[0]=='-'){
+            dl->type=2; dl->old_lno=old_lno++;
+            snprintf(dl->old_line,sizeof(dl->old_line),"%s",lb+1);
         } else {
-            printf(FG_BRIGHT_BLACK " %s[%s] " RESET,
-                   tab_names[i], tab_keys[i]);
+            dl->type=0; dl->old_lno=old_lno++; dl->new_lno=new_lno++;
+            const char *src=(lb[0]==' ')?lb+1:lb;
+            snprintf(dl->old_line,sizeof(dl->old_line),"%s",src);
+            snprintf(dl->new_line,sizeof(dl->new_line),"%s",src);
         }
-        printf(FG_BRIGHT_BLACK "│" RESET);
+        G.diff_count++; line=nl?nl+1:line+strlen(line);
     }
-
-    /* Right: branch name */
-    char right[128];
-    snprintf(right, sizeof(right), " ⎇ %s ", g.branch_name);
-    int rlen = strlen(right);
-    int cur_col = 10; /* approximate */
-    for (int i = 0; i < (int)(sizeof(tab_names)/sizeof(tab_names[0])); i++)
-        cur_col += strlen(tab_names[i]) + 5;
-    
-    int pad = g.cols - cur_col - rlen;
-    for (int i = 0; i < pad && i < g.cols; i++) printf(" ");
-    printf(FG_BRIGHT_MAGENTA BOLD "%s" RESET, right);
-
-    /* Fill remaining */
-    printf(RESET);
+    G.diff_scroll=0; G.diff_hscroll=0;
+}
+static void load_diff_file(const char *path,bool staged){
+    char cmd[1024];
+    if(staged)snprintf(cmd,sizeof(cmd),"git diff --cached -- '%s' 2>/dev/null",path);
+    else       snprintf(cmd,sizeof(cmd),"git diff -- '%s' 2>/dev/null",path);
+    char *o=git_run(cmd);
+    if(!o||!o[0]){
+        free(o);
+        snprintf(cmd,sizeof(cmd),"cat '%s' 2>/dev/null",path);
+        o=git_run(cmd);
+        if(o&&o[0]){
+            G.diff_count=0;
+            const char *line=o; int lno=1;
+            while(*line&&G.diff_count<MAX_DIFF_LINES){
+                const char *nl=strchr(line,'\n');
+                size_t len=nl?(size_t)(nl-line):strlen(line);
+                DiffLine *dl=&G.diff_lines[G.diff_count++]; memset(dl,0,sizeof(*dl));
+                dl->type=1; dl->new_lno=lno++;
+                if(len>=LINE_MAX_LEN)len=LINE_MAX_LEN-1;
+                memcpy(dl->new_line,line,len); dl->new_line[len]='\0';
+                line=nl?nl+1:line+strlen(line);
+            }
+            G.diff_scroll=0; G.diff_hscroll=0;
+        } else G.diff_count=0;
+        free(o); return;
+    }
+    parse_diff(o); free(o);
+}
+static void load_diff_commit(const char *hash){
+    char cmd[256]; snprintf(cmd,sizeof(cmd),"git show %s 2>/dev/null",hash);
+    char *o=git_run(cmd); parse_diff(o?o:""); free(o);
+}
+static void update_diff(void){
+    if(G.file_count>0&&G.file_sel<G.file_count){
+        GitFile *f=&G.files[G.file_sel];
+        snprintf(G.diff_title,sizeof(G.diff_title),"%s",f->path);
+        G.diff_staged=f->staged;
+        load_diff_file(f->path,f->staged);
+    }
+}
+static void reload_all(void){
+    load_branch(); load_status(); load_log(); load_branches(); load_stash();
+    update_diff(); OK("Refreshed");
 }
 
-/* ─── Status bar ─────────────────────────────────────────────── */
-static void draw_statusbar(void) {
-    move_to(g.rows, 1);
-    printf(RESET BG_BLACK);
-    
-    /* Left: contextual hints */
-    const char *hints = "";
-    switch (g.current_view) {
-        case VIEW_STATUS:   hints = "SPC:stage/unstage  a:stage-all  c:commit  d:discard  Enter:diff"; break;
-        case VIEW_LOG:      hints = "Enter:diff  j/k:move  PgUp/Dn:scroll"; break;
-        case VIEW_DIFF:     hints = "j/k:scroll  q:back  Tab:next-view"; break;
-        case VIEW_BRANCHES: hints = "Enter:checkout  n:new  D:delete"; break;
-        case VIEW_STASH:    hints = "Enter:apply  p:pop  D:drop"; break;
-        case VIEW_HELP:     hints = "q:close help"; break;
-        default: break;
+/* ================================================================
+   BOX DRAWING HELPERS
+================================================================ */
+static void box_top(int row,int col,int w,const char *title,bool active){
+    at(row,col);
+    if(active){cfg(TH->fg_accent1);printf(T_BOLD);}else cfg(TH->fg_dim);
+    printf("┌");
+    int tlen=(int)strlen(title)+2;
+    int left=(w-2-tlen)/2; if(left<0)left=0;
+    for(int i=0;i<left;i++)printf("─");
+    rst();
+    if(active){cfg(TH->fg_bright);printf(T_BOLD);}else cfg(TH->fg_dim);
+    printf(" %s ",title);
+    if(active){rst();cfg(TH->fg_accent1);printf(T_BOLD);}else{rst();cfg(TH->fg_dim);}
+    int right=w-2-left-tlen;
+    for(int i=0;i<right;i++)printf("─");
+    printf("┐"); rst();
+}
+static void box_bot(int row,int col,int w){
+    at(row,col); cfg(TH->fg_dim); printf("└");
+    for(int i=0;i<w-2;i++)printf("─");
+    printf("┘"); rst();
+}
+static void box_sides(int top,int col,int w,int h){
+    cfg(TH->fg_dim);
+    for(int r=top+1;r<top+h-1;r++){at(r,col);printf("│");at(r,col+w-1);printf("│");}
+    rst();
+}
+static void box_fill(int top,int col,int w,int h,Color c){
+    for(int r=top+1;r<top+h-1;r++){
+        at(r,col+1); cbg(c);
+        for(int i=0;i<w-2;i++)putchar(' ');
+        rst();
+    }
+}
+
+/* ================================================================
+   TAB BAR
+================================================================ */
+static void draw_tabbar(void){
+    at(1,1); cbg(TH->bg_tab_inact); cfg(TH->fg_accent2); printf(T_BOLD);
+    printf(" ⎇ gitui "); rst();
+    static const struct{const char *n,*k;View v;}tabs[]={
+        {"Changes","1",VIEW_STATUS},{"Log","2",VIEW_LOG},
+        {"Branches","3",VIEW_BRANCHES},{"Stash","4",VIEW_STASH},{"Help","?",VIEW_HELP}
+    };
+    for(int i=0;i<5;i++){
+        bool act=(tabs[i].v==G.current_view);
+        if(act){cbg(TH->bg_tab_act);cfg(TH->fg_bright);printf(T_BOLD);}
+        else{cbg(TH->bg_tab_inact);cfg(TH->fg_dim);}
+        printf(" %s[%s] ",tabs[i].n,tabs[i].k); rst();
+        cbg(TH->bg_tab_inact); cfg(TH->fg_dim); printf("│");
+    }
+    /* Vi indicator */
+    if(G.vi_enabled){
+        if(G.vi_mode==VIMODE_NORMAL){cbg(TH->bg_tab_inact);cfg(TH->fg_staged);printf(T_BOLD);printf(" NORMAL ");}
+        else{cbg(TH->bg_tab_inact);cfg(TH->fg_unstaged);printf(T_BOLD);printf(" INSERT ");}
+    }
+    /* Theme & branch - right aligned */
+    cbg(TH->bg_tab_inact); cfg(TH->fg_accent3);
+    char rbuf[160]; int rlen=snprintf(rbuf,sizeof(rbuf)," ◈ %s  ⎇ %s ",TH->name,G.branch_name);
+    int cur_col=9+5*11+( G.vi_enabled?8:0 ); /* approximate */
+    int pad=G.cols-cur_col-rlen; if(pad<0)pad=0;
+    for(int i=0;i<pad;i++)putchar(' ');
+    cfg(TH->fg_accent3); printf("◈ %s  ",TH->name);
+    cfg(TH->fg_ref_local); printf(T_BOLD); printf("⎇ %s ",G.branch_name);
+    rst();
+}
+
+/* ================================================================
+   STATUS BAR
+================================================================ */
+static void draw_statusbar(void){
+    at(G.rows,1); cbg(TH->bg_panel);
+    const char *hint="";
+    if(G.current_view==VIEW_STATUS){
+        if(G.focus==FOCUS_CHANGES) hint="SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme  V:vi";
+        else if(G.focus==FOCUS_GRAPH) hint="j/k:move  ↵:diff  g/G:top/bot  T:theme";
+        else hint="j/k:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
+    } else if(G.current_view==VIEW_LOG) hint="j/k:move  ↵:diff  n:branch  s:side-by-side  T:theme";
+    else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
+    else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
+    else if(G.current_view==VIEW_HELP) hint="q:close help";
+    cfg(TH->fg_dim); printf(" %s",hint);
+    if(G.vi_enabled&&G.vi_count>0){
+        at(G.rows,G.cols-12); cfg(TH->fg_accent1); printf(T_BOLD); printf("[%d]",G.vi_count);
+    }
+    if(G.status_msg[0]&&(time(NULL)-G.status_msg_time)<5){
+        int mlen=(int)strlen(G.status_msg)+2;
+        at(G.rows,G.cols-mlen);
+        if(G.status_is_err)cfg(TH->fg_err); else cfg(TH->fg_ok);
+        printf(T_BOLD); printf(" %s ",G.status_msg);
+    }
+    rst(); printf(CSI"K");
+}
+
+/* ================================================================
+   CHANGES PANE
+================================================================ */
+static void draw_changes(int top,int h){
+    int w=G.lw;
+    bool act=(G.focus==FOCUS_CHANGES&&G.current_view==VIEW_STATUS);
+    box_top(top,1,w,"Changes",act);
+    box_sides(top,1,w,h);
+    box_fill(top,1,w,h,TH->bg_panel);
+
+    int staged_n=0,unstaged_n=0;
+    for(int i=0;i<G.file_count;i++) G.files[i].staged?staged_n++:unstaged_n++;
+
+    int row=top+1, lim=top+h-1, iw=w-2;
+
+    /* ── Staged section ── */
+    if(row<lim){
+        at(row,2); cbg(TH->bg_header); cfg(TH->fg_staged); printf(T_BOLD);
+        char hdr[64]; snprintf(hdr,sizeof(hdr)," ✓ Staged (%d) ",staged_n);
+        ppad(hdr,iw); rst(); row++;
+    }
+    for(int i=0;i<G.file_count&&row<lim;i++){
+        if(!G.files[i].staged)continue;
+        bool sel=(G.file_sel==i&&act);
+        at(row,2);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
+        cfg(sel?TH->fg_sel:TH->fg_staged);
+        const char *ic=" M";
+        switch(G.files[i].st){
+            case FS_STAGED_NEW:ic=" A";break; case FS_STAGED_DEL:ic=" D";break;
+            case FS_RENAMED:ic=" R";break;    case FS_COPIED:ic=" C";break;
+            default:ic=" M";break;
+        }
+        printf("%s ",ic);
+        if(sel){cfg(TH->fg_sel);cbg(TH->bg_sel);}else{cfg(TH->fg_normal);cbg(TH->bg_panel);}
+        char disp[512];
+        if(G.files[i].orig[0])snprintf(disp,sizeof(disp),"%s→%s",G.files[i].orig,G.files[i].path);
+        else snprintf(disp,sizeof(disp),"%s",G.files[i].path);
+        ppad(disp,iw-3); rst(); row++;
+    }
+    /* spacer */
+    if(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)putchar(' ');rst();row++;}
+
+    /* ── Unstaged section ── */
+    if(row<lim){
+        at(row,2); cbg(TH->bg_header); cfg(TH->fg_unstaged); printf(T_BOLD);
+        char hdr[64]; snprintf(hdr,sizeof(hdr)," ✗ Unstaged (%d) ",unstaged_n);
+        ppad(hdr,iw); rst(); row++;
+    }
+    for(int i=0;i<G.file_count&&row<lim;i++){
+        if(G.files[i].staged)continue;
+        bool sel=(G.file_sel==i&&act);
+        at(row,2);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
+        Color ic_col=TH->fg_unstaged;
+        const char *ic=" M";
+        switch(G.files[i].st){
+            case FS_UNTRACKED:ic=" ?";ic_col=TH->fg_untracked;break;
+            case FS_DELETED:ic=" D";break;
+            case FS_CONFLICT:ic=" !";ic_col=TH->fg_conflict;break;
+            default:ic=" M";break;
+        }
+        cfg(sel?TH->fg_sel:ic_col); printf("%s ",ic);
+        if(sel){cfg(TH->fg_sel);cbg(TH->bg_sel);}else{cfg(TH->fg_normal);cbg(TH->bg_panel);}
+        ppad(G.files[i].path,iw-3); rst(); row++;
+    }
+    /* fill */
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)putchar(' ');rst();row++;}
+    box_bot(top+h-1,1,w);
+}
+
+/* ================================================================
+   GRAPH PANE
+================================================================ */
+static void draw_graph(int top,int h){
+    int w=G.lw;
+    bool act=(G.focus==FOCUS_GRAPH&&G.current_view==VIEW_STATUS);
+    box_top(top,1,w,"Graph",act);
+    box_sides(top,1,w,h);
+    box_fill(top,1,w,h,TH->bg_base);
+
+    int row=top+1,lim=top+h-1,iw=w-2;
+    int vis=lim-row;
+
+    if(G.commit_sel<G.commit_scroll)G.commit_scroll=G.commit_sel;
+    if(G.commit_sel>=G.commit_scroll+vis)G.commit_scroll=G.commit_sel-vis+1;
+
+    for(int i=G.commit_scroll;i<G.commit_count&&row<lim;i++,row++){
+        GitCommit *c=&G.commits[i];
+        bool sel=(G.commit_sel==i);
+        at(row,2);
+        if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+
+        /* Graph chars */
+        char *gp=c->graph; int gc=0;
+        while(*gp&&gc<GRAPH_COLS){
+            int ci_=(c->graph_col/2)%6;
+            if(*gp=='*'){
+                cfg(TH->fg_graph[ci_]); printf(T_BOLD); putchar(244); /* ● approximation */
+                rst(); if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+            } else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);putchar('|');}
+            else if(*gp=='/'){cfg(TH->fg_graph[1]);putchar('/');}
+            else if(*gp=='\\'){cfg(TH->fg_graph[2]);putchar('\\');}
+            else if(*gp=='-'){cfg(TH->fg_graph[2]);putchar('-');}
+            else putchar(*gp);
+            rst(); if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+            gp++; gc++;
+        }
+        while(gc<GRAPH_COLS){putchar(' ');gc++;}
+
+        cfg(sel?TH->fg_sel:TH->fg_accent1); printf(T_BOLD);
+        printf("%.8s ",c->hash); rst();
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_base);
+
+        int used=GRAPH_COLS+9;
+        if(c->refs[0]&&iw>used+8){
+            cfg(sel?TH->fg_sel:TH->fg_ref_local);
+            char rf[20]; snprintf(rf,sizeof(rf),"(%.14s)",c->refs);
+            printf("%s ",rf); used+=(int)strlen(rf)+1;
+            if(sel){cfg(TH->fg_sel);cbg(TH->bg_sel);}else{rst();cbg(TH->bg_base);}
+        }
+        int sw=iw-used-1;
+        if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
+        rst(); row++;
+        row--; /* loop will increment */
+    }
+    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<iw;i++)putchar(' ');rst();row++;}
+    box_bot(top+h-1,1,w);
+}
+
+/* ================================================================
+   DIFF PANE (side-by-side + unified)
+================================================================ */
+static void draw_diff(int top,int rx,int rw,int h){
+    bool act=(G.focus==FOCUS_DIFF);
+    char title[128];
+    if(G.diff_title[0])snprintf(title,sizeof(title),"%.60s%s",G.diff_title,G.diff_staged?" [staged]":"");
+    else snprintf(title,sizeof(title),"Diff (select file or commit)");
+
+    box_top(top,rx,rw,title,act);
+    box_sides(top,rx,rw,h);
+    box_fill(top,rx,rw,h,TH->bg_base);
+    box_bot(top+h-1,rx,rw);
+
+    int row=top+1,lim=top+h-1,vis=lim-row;
+    int maxsc=imax(0,G.diff_count-vis);
+    if(G.diff_scroll<0)G.diff_scroll=0;
+    if(G.diff_scroll>maxsc)G.diff_scroll=maxsc;
+
+    if(!G.diff_count){
+        at(row+vis/2,rx+rw/2-12);
+        cfg(TH->fg_dim); printf("(no diff — select a file or commit)"); rst(); return;
     }
 
-    printf(FG_BRIGHT_BLACK " %s" RESET, hints);
+    bool ssb=G.diff_sidebyside;
+    int lnum_w=4;
+    int half=(rw-2)/2;
+    int code_w=ssb?(half-lnum_w-2):(rw-2-lnum_w-2);
+    if(code_w<8)code_w=8;
 
-    /* Right: status message */
-    if (g.status_msg[0] && (time(NULL) - g.status_msg_time) < 4) {
-        int hint_len = strlen(hints) + 1;
-        int msg_len = strlen(g.status_msg);
-        int pad = g.cols - hint_len - msg_len - 2;
-        for (int i = 0; i < pad; i++) printf(" ");
-        printf(FG_BRIGHT_GREEN BOLD " %s " RESET, g.status_msg);
+    /* Column headers for side-by-side */
+    if(ssb){
+        /* Center divider */
+        cfg(TH->fg_dim);
+        for(int r=row+1;r<lim;r++){at(r,rx+half);printf("│");}
+        /* Header */
+        at(row,rx+1); cbg(TH->bg_header); cfg(TH->fg_accent3); printf(T_BOLD);
+        ppad(" ◀ OLD",half-1);
+        at(row,rx+half+1); ppad(" NEW ▶ ",half-1);
+        rst(); row++; lim--; vis--;
+        if(G.diff_scroll>imax(0,G.diff_count-vis))G.diff_scroll=imax(0,G.diff_count-vis);
+    }
+
+    int di=G.diff_scroll;
+    if(!ssb){
+        /* Unified */
+        for(;di<G.diff_count&&row<lim;di++,row++){
+            DiffLine *dl=&G.diff_lines[di];
+            at(row,rx+1);
+            switch(dl->type){
+            case 0: cbg(TH->bg_base);cfg(TH->fg_linenum);printf("%*d ",lnum_w,dl->old_lno);cfg(TH->fg_diff_ctx);ppad(dl->old_line,code_w);break;
+            case 1: cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)printf("%*d ",lnum_w,dl->new_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_add);printf(T_BOLD);printf("+");ppad(dl->new_line,code_w-1);break;
+            case 2: cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)printf("%*d ",lnum_w,dl->old_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_del);printf(T_BOLD);printf("-");ppad(dl->old_line,code_w-1);break;
+            case 3: cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);printf(T_BOLD);ppad(dl->new_line,code_w+lnum_w+2);break;
+            case 4: cbg(TH->bg_header);cfg(TH->fg_accent2);printf(T_BOLD);ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
+            }
+            rst();
+        }
     } else {
-        /* Fill rest */
-        int hint_len = strlen(hints) + 1;
-        int pad = g.cols - hint_len;
-        for (int i = 0; i < pad; i++) printf(" ");
+        /* Side-by-side */
+        while(di<G.diff_count&&row<lim){
+            DiffLine *dl=&G.diff_lines[di];
+            if(dl->type==3||dl->type==4){
+                at(row,rx+1);
+                if(dl->type==3){cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);}
+                else{cbg(TH->bg_header);cfg(TH->fg_accent2);}
+                printf(T_BOLD);
+                ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);
+                rst(); di++; row++; continue;
+            }
+            if(dl->type==0){
+                at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
+                printf("%*d ",lnum_w,dl->old_lno); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w);
+                at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
+                printf("%*d ",lnum_w,dl->new_lno); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
+                rst(); di++; row++; continue;
+            }
+            DiffLine *od=NULL,*nd=NULL;
+            if(dl->type==2){od=dl;if(di+1<G.diff_count&&G.diff_lines[di+1].type==1){nd=&G.diff_lines[di+1];di+=2;}else di++;}
+            else if(dl->type==1){nd=dl;di++;}
+            /* Left: old */
+            at(row,rx+1);
+            if(od){cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(od->old_lno>0)printf("%*d ",lnum_w,od->old_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_del);printf(T_BOLD);ppad(od->old_line,code_w);}
+            else{cbg(TH->bg_base);for(int i=0;i<code_w+lnum_w+1;i++)putchar(' ');}
+            rst();
+            /* Right: new */
+            at(row,rx+half+1);
+            if(nd){cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(nd->new_lno>0)printf("%*d ",lnum_w,nd->new_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_add);printf(T_BOLD);ppad(nd->new_line,code_w);}
+            else{cbg(TH->bg_base);for(int i=0;i<code_w+lnum_w+1;i++)putchar(' ');}
+            rst(); row++;
+        }
     }
-    printf(RESET);
-}
-
-/* ─── Prompt ─────────────────────────────────────────────────── */
-static void draw_prompt(void) {
-    if (!g.in_prompt) return;
-
-    int row = g.rows - 1;
-    move_to(row, 1);
-    printf(RESET BG_BLUE FG_BRIGHT_WHITE BOLD " %s " RESET, g.prompt_label);
-    printf(BG_BLACK FG_BRIGHT_WHITE " %s" RESET, g.prompt_buf);
-    /* Cursor */
-    printf(BG_WHITE FG_BLACK " " RESET);
-
     /* Fill */
-    int used = strlen(g.prompt_label) + 3 + strlen(g.prompt_buf) + 1 + 1;
-    for (int i = used; i < g.cols; i++) printf(" ");
+    while(row<lim){at(row,rx+1);cbg(TH->bg_base);for(int i=0;i<rw-2;i++)putchar(' ');rst();row++;}
+    /* Scrollbar */
+    if(G.diff_count>vis&&vis>2){
+        int bh=imax(1,(vis*vis)/G.diff_count);
+        int bpos=maxsc>0?((G.diff_scroll*(vis-bh))/maxsc):0;
+        for(int r=0;r<vis;r++){
+            at(top+1+r,rx+rw-1);
+            cfg(r>=bpos&&r<bpos+bh?TH->fg_accent2:TH->fg_dim);
+            printf(r>=bpos&&r<bpos+bh?"█":"│");
+        }
+        rst();
+    }
 }
 
-/* ─── Main draw ──────────────────────────────────────────────── */
-static void draw(void) {
-    printf(HIDE_CURSOR);
-    
-    /* Clear */
-    printf(CLEAR);
+/* ================================================================
+   LOG VIEW (full screen)
+================================================================ */
+static void draw_log(int top,int h){
+    int w=G.cols;
+    box_top(top,1,w,"Commit Log",true);
+    box_sides(top,1,w,h);
+    box_fill(top,1,w,h,TH->bg_base);
+    box_bot(top+h-1,1,w);
 
+    int row=top+1,lim=top+h-1,vis=lim-row;
+    if(G.commit_sel<G.commit_scroll)G.commit_scroll=G.commit_sel;
+    if(G.commit_sel>=G.commit_scroll+vis)G.commit_scroll=G.commit_sel-vis+1;
+
+    for(int i=G.commit_scroll;i<G.commit_count&&row<lim;i++,row++){
+        GitCommit *c=&G.commits[i];
+        bool sel=(G.commit_sel==i);
+        at(row,2);
+        if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+
+        /* graph */
+        char *gp=c->graph; int gc=0;
+        while(*gp&&gc<GRAPH_COLS){
+            int ci_=(c->graph_col/2)%6;
+            if(*gp=='*'){cfg(TH->fg_graph[ci_]);printf(T_BOLD);putchar('*');}
+            else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);putchar('|');}
+            else{cfg(TH->fg_graph[0]);putchar(*gp);}
+            rst(); if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+            gp++;gc++;
+        }
+        while(gc<GRAPH_COLS){putchar(' ');gc++;}
+
+        cfg(sel?TH->fg_sel:TH->fg_accent1);printf(T_BOLD);printf("%.8s ",c->hash);rst();
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_base);
+        if(c->refs[0]){cfg(sel?TH->fg_sel:TH->fg_ref_local);char rf[32];snprintf(rf,sizeof(rf),"(%.18s) ",c->refs);ppad(rf,21);}
+        cfg(sel?TH->fg_sel:TH->fg_accent2);ppad(c->author,14);
+        cfg(sel?TH->fg_sel:TH->fg_accent3);printf(" %-13s ",c->date);
+        int used=GRAPH_COLS+10+21+14+15;
+        int sw=w-3-used;
+        if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
+        rst();
+    }
+    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<w-3;i++)putchar(' ');rst();row++;}
+}
+
+/* ================================================================
+   BRANCHES VIEW
+================================================================ */
+static void draw_branches(int top,int h){
+    int w=G.cols;
+    box_top(top,1,w,"Branches",true);
+    box_sides(top,1,w,h);
+    box_fill(top,1,w,h,TH->bg_panel);
+    box_bot(top+h-1,1,w);
+
+    int row=top+1,lim=top+h-1,vis=lim-row;
+    if(G.branch_sel<G.branch_scroll)G.branch_scroll=G.branch_sel;
+    if(G.branch_sel>=G.branch_scroll+vis)G.branch_scroll=G.branch_sel-vis+1;
+
+    /* header */
+    at(row,2);cbg(TH->bg_header);cfg(TH->fg_accent3);printf(T_BOLD);
+    printf("  %-2s %-40s %-28s %s","★","Name","Upstream","±");
+    for(int i=0;i<w-78;i++)putchar(' ');
+    rst();row++;
+
+    for(int i=G.branch_scroll;i<G.branch_count&&row<lim;i++,row++){
+        GitBranch *b=&G.branches[i]; bool sel=(G.branch_sel==i);
+        at(row,2);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
+        if(b->is_current){cfg(sel?TH->fg_sel:TH->fg_staged);printf(T_BOLD);printf("✱ ");}else printf("  ");
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_panel);
+        if(b->is_remote){cfg(sel?TH->fg_sel:TH->fg_ref_remote);printf("⬡ ");}
+        else{cfg(sel?TH->fg_sel:TH->fg_ref_local);printf("⬢ ");}
+        if(sel){cfg(TH->fg_sel);}else cfg(TH->fg_normal);
+        char nb[42]; snprintf(nb,sizeof(nb),"%-40s",b->name); ppad(nb,40); printf(" ");
+        ppad(b->upstream,28); printf(" ");
+        if(b->ahead||b->behind){cfg(sel?TH->fg_sel:TH->fg_accent1);printf("↑%d ↓%d",b->ahead,b->behind);}
+        else if(b->upstream[0]){cfg(sel?TH->fg_sel:TH->fg_staged);printf("✓");}
+        rst();
+    }
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<w-3;i++)putchar(' ');rst();row++;}
+}
+
+/* ================================================================
+   STASH VIEW
+================================================================ */
+static void draw_stash(int top,int h){
+    int w=G.cols; char title[64];
+    snprintf(title,sizeof(title),"Stash (%d)",G.stash_count);
+    box_top(top,1,w,title,true);
+    box_sides(top,1,w,h);
+    box_fill(top,1,w,h,TH->bg_panel);
+    box_bot(top+h-1,1,w);
+    int row=top+1,lim=top+h-1;
+    if(!G.stash_count){
+        at(row+2,G.cols/2-14);
+        cfg(TH->fg_dim);printf("No stashes. Press 's' to stash changes.");rst();return;
+    }
+    for(int i=0;i<G.stash_count&&row<lim;i++,row++){
+        bool sel=(G.stash_sel==i);
+        at(row,2);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
+        cfg(sel?TH->fg_sel:TH->fg_accent1);printf(T_BOLD);printf(" stash@{%d} ",G.stashes[i].index);
+        cfg(sel?TH->fg_sel:TH->fg_accent3);printf("%.8s  ",G.stashes[i].hash);
+        cfg(sel?TH->fg_sel:TH->fg_normal);ppad(G.stashes[i].message,w-28);
+        rst();
+    }
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<w-3;i++)putchar(' ');rst();row++;}
+}
+
+/* ================================================================
+   HELP VIEW
+================================================================ */
+static void draw_help(int top,int h){
+    int w=G.cols;
+    box_top(top,1,w,"Help & Keybindings",true);
+    box_sides(top,1,w,h);
+    box_fill(top,1,w,h,TH->bg_panel);
+    box_bot(top+h-1,1,w);
+
+    static const char *E[][2]={
+        {"NAVIGATION",""},
+        {"  Tab / Shift+Tab","Cycle views / focus panes"},
+        {"  1-4 / ?","Jump: Changes, Log, Branches, Stash, Help"},
+        {"  j/k  ↑/↓","Move selection"},
+        {"  h/l  ←/→","Switch focus pane"},
+        {"  g/G","Top / bottom (or gg in Vi mode)"},
+        {"  Ctrl+D/U","Half-page down/up"},
+        {"  PgUp/PgDn","Page scroll"},
+        {"",""},
+        {"CHANGES PANE",""},
+        {"  Space","Stage / unstage selected file"},
+        {"  a / u","Stage all / Unstage all"},
+        {"  d","Discard changes (careful!)"},
+        {"  Enter / =","View diff for file, switch to diff pane"},
+        {"",""},
+        {"DIFF PANE",""},
+        {"  s","Toggle side-by-side / unified"},
+        {"  j/k  ↑/↓","Scroll diff vertically"},
+        {"  [ / ]","Horizontal scroll"},
+        {"  g/G","Top / bottom of diff"},
+        {"",""},
+        {"GRAPH PANE (in Changes view)",""},
+        {"  j/k","Move through commits"},
+        {"  Enter","Show commit diff in diff pane"},
+        {"",""},
+        {"BRANCHES",""},
+        {"  Enter","Checkout selected branch"},
+        {"  n","Create new branch (prompt)"},
+        {"  D","Delete branch (force)"},
+        {"",""},
+        {"STASH",""},
+        {"  Enter","Apply stash"},
+        {"  p","Pop stash (apply + drop)"},
+        {"  D","Drop stash"},
+        {"",""},
+        {"GLOBAL",""},
+        {"  c","Commit staged changes"},
+        {"  A","Amend last commit"},
+        {"  P","Push to remote"},
+        {"  f","Fetch + pull"},
+        {"  s","Stash working changes"},
+        {"  R","Full refresh"},
+        {"  T","Cycle theme: Dark+ → VS-Light → Solarized"},
+        {"  V","Toggle Vi modal keybindings"},
+        {"  ?","Toggle this help"},
+        {"  q / Esc","Go back / quit"},
+        {"",""},
+        {"VI MODE  (toggle with V)",""},
+        {"  i","Enter insert/action mode"},
+        {"  Esc","Return to normal mode"},
+        {"  3j / 5k","Numeric prefix (repeat count)"},
+        {"  gg / G","Top / bottom"},
+        {"  Ctrl+F/B","Page down/up"},
+        {"",""},
+        {"MOUSE",""},
+        {"  Click","Focus pane, select item"},
+        {"  Scroll wheel","Scroll pane under cursor"},
+        {NULL,NULL}
+    };
+    int row=top+1,lim=top+h-1;
+    int split=G.cols/2;
+    for(int i=0;E[i][0]&&row<lim;i++,row++){
+        at(row,2); cbg(TH->bg_panel);
+        if(E[i][1][0]=='\0'&&strlen(E[i][0])>1){
+            cfg(TH->fg_accent1);printf(T_BOLD);ppad(E[i][0],split-3);
+        } else if(!E[i][0][0]){
+            for(int k=0;k<G.cols-3;k++)putchar(' ');
+        } else {
+            cfg(TH->fg_accent2);printf(T_BOLD);ppad(E[i][0],split-3);
+            at(row,split);cbg(TH->bg_panel);cfg(TH->fg_normal);rst();cbg(TH->bg_panel);
+            ppad(E[i][1],G.cols-split-2);
+        }
+        rst();
+    }
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<G.cols-3;i++)putchar(' ');rst();row++;}
+}
+
+/* ================================================================
+   PROMPT OVERLAY
+================================================================ */
+static void draw_prompt_overlay(void){
+    if(!G.in_prompt)return;
+    at(G.rows-1,1);
+    cbg(TH->bg_tab_act);cfg(TH->fg_accent2);printf(T_BOLD);
+    printf(" %s ",G.prompt_label);
+    rst(); cbg(TH->bg_panel);cfg(TH->fg_bright);
+    printf(" ");
+    if(G.prompt_obscure){for(int i=0;i<G.prompt_cursor;i++)putchar('*');}
+    else printf("%.*s",G.prompt_cursor,G.prompt_buf);
+    cbg(TH->fg_accent1);cfg(TH->bg_base);
+    char nc=G.prompt_buf[G.prompt_cursor];
+    putchar(nc?nc:' '); rst();
+    cbg(TH->bg_panel);cfg(TH->fg_bright);
+    if(!G.prompt_obscure)printf("%s",G.prompt_buf+G.prompt_cursor+(nc?1:0));
+    int used=(int)strlen(G.prompt_label)+3+(int)strlen(G.prompt_buf)+2;
+    for(int i=used;i<G.cols;i++)putchar(' ');
+    rst();
+}
+
+/* ================================================================
+   MASTER DRAW
+================================================================ */
+static void draw(void){
+    printf(T_HIDE T_CLEAR);
+    layout();
     draw_tabbar();
 
-    int content_top = 2;
-    int content_height = g.rows - 2; /* minus tabbar and statusbar */
-    int content_width = g.cols;
-
-    if (g.current_view == VIEW_HELP) {
-        draw_help(content_top, 1, content_height, content_width);
-    } else if (g.current_view == VIEW_DIFF) {
-        draw_diff(content_top, 1, content_height, content_width);
-    } else if (g.current_view == VIEW_STATUS) {
-        /* Left: status (40%), Right: diff (60%) */
-        int lw = content_width * 40 / 100;
-        if (lw < 20) lw = 20;
-        int rw = content_width - lw;
-        draw_status(content_top, 1, content_height, lw);
-        draw_diff(content_top, lw + 1, content_height, rw);
-    } else if (g.current_view == VIEW_LOG) {
-        /* Full width log, diff below */
-        int lh = content_height * 55 / 100;
-        if (lh < 5) lh = 5;
-        int dh = content_height - lh;
-        draw_log(content_top, 1, lh, content_width);
-        draw_diff(content_top + lh, 1, dh, content_width);
-    } else if (g.current_view == VIEW_BRANCHES) {
-        draw_branches(content_top, 1, content_height, content_width);
-    } else if (g.current_view == VIEW_STASH) {
-        draw_stash(content_top, 1, content_height, content_width);
+    int ct=2, ch=G.rows-2;
+    switch(G.current_view){
+    case VIEW_STATUS:
+        draw_changes(ct, G.lh_chg);
+        draw_graph(ct+G.lh_chg, G.lh_gph);
+        draw_diff(ct, G.rx, G.rw, ch);
+        break;
+    case VIEW_LOG:{
+        int lh=ch*55/100, dh=ch-lh;
+        draw_log(ct,lh);
+        draw_diff(ct+lh,1,G.cols,dh);
+        break;
     }
-
+    case VIEW_BRANCHES: draw_branches(ct,ch); break;
+    case VIEW_STASH:    draw_stash(ct,ch);    break;
+    case VIEW_HELP:     draw_help(ct,ch);     break;
+    default: break;
+    }
     draw_statusbar();
-    if (g.in_prompt) draw_prompt();
-
-    printf(SHOW_CURSOR);
+    draw_prompt_overlay();
+    printf(T_SHOW);
     fflush(stdout);
 }
 
-/* ─── Prompt system ──────────────────────────────────────────── */
-static void start_prompt(const char *label, void (*cb)(const char *)) {
-    g.in_prompt = true;
-    snprintf(g.prompt_label, sizeof(g.prompt_label), "%s", label);
-    g.prompt_buf[0] = '\0';
-    g.prompt_cursor = 0;
-    g.prompt_cb = cb;
-}
+/* ================================================================
+   INPUT READING
+================================================================ */
+static Key read_key(void){
+    Key k={KEY_NONE,0,{0,0,0,false,false,false}};
+    unsigned char buf[32];
+    int n=(int)read(STDIN_FILENO,buf,sizeof(buf));
+    if(n<=0)return k;
 
-static void prompt_char(char c) {
-    if (!g.in_prompt) return;
-    int len = strlen(g.prompt_buf);
-    if (len + 1 < INPUT_MAX) {
-        memmove(&g.prompt_buf[g.prompt_cursor+1],
-                &g.prompt_buf[g.prompt_cursor],
-                len - g.prompt_cursor + 1);
-        g.prompt_buf[g.prompt_cursor++] = c;
-    }
-}
-
-static void prompt_backspace(void) {
-    if (!g.in_prompt || g.prompt_cursor == 0) return;
-    int len = strlen(g.prompt_buf);
-    memmove(&g.prompt_buf[g.prompt_cursor-1],
-            &g.prompt_buf[g.prompt_cursor],
-            len - g.prompt_cursor + 1);
-    g.prompt_cursor--;
-}
-
-static void prompt_confirm(void) {
-    if (!g.in_prompt) return;
-    g.in_prompt = false;
-    if (g.prompt_cb) g.prompt_cb(g.prompt_buf);
-    g.prompt_buf[0] = '\0';
-    g.prompt_cursor = 0;
-}
-
-static void prompt_cancel(void) {
-    g.in_prompt = false;
-    g.prompt_buf[0] = '\0';
-    g.prompt_cursor = 0;
-    g.prompt_cb = NULL;
-}
-
-/* ─── Git actions ────────────────────────────────────────────── */
-static void action_stage_file(void) {
-    if (g.file_count == 0) return;
-    GitFile *f = &g.files[g.file_sel];
-    
-    if (f->staged) {
-        /* Unstage */
-        if (f->status == FILE_STAGED_NEW)
-            git_exec("git reset HEAD -- '%s'", f->path);
-        else
-            git_exec("git reset HEAD -- '%s'", f->path);
-        set_msg("Unstaged: %s", f->path);
-    } else {
-        /* Stage */
-        if (f->status == FILE_UNTRACKED || f->status == FILE_MODIFIED)
-            git_exec("git add -- '%s'", f->path);
-        else if (f->status == FILE_DELETED)
-            git_exec("git rm -- '%s'", f->path);
-        else
-            git_exec("git add -- '%s'", f->path);
-        set_msg("Staged: %s", f->path);
-    }
-    load_status();
-}
-
-static void action_stage_all(void) {
-    git_exec("git add -A");
-    set_msg("Staged all files");
-    load_status();
-}
-
-static void action_unstage_all(void) {
-    git_exec("git reset HEAD");
-    set_msg("Unstaged all files");
-    load_status();
-}
-
-static void do_commit(const char *msg) {
-    if (!msg || !msg[0]) { set_msg("Commit cancelled (empty message)"); return; }
-    
-    /* Need to run interactively but we're in TUI - use temp file approach */
-    char tmpfile[64] = "/tmp/gitui_commit_XXXXXX";
-    int fd = mkstemp(tmpfile);
-    if (fd == -1) { set_msg("Error: cannot create temp file"); return; }
-    write(fd, msg, strlen(msg));
-    close(fd);
-    
-    int ret = git_exec("git commit -F '%s'", tmpfile);
-    unlink(tmpfile);
-    
-    if (ret == 0) {
-        set_msg("Committed: %.50s", msg);
-        load_status();
-        load_log();
-    } else {
-        set_msg("Commit failed (nothing staged?)");
-    }
-}
-
-static void action_commit(void) {
-    int staged, unstaged;
-    status_counts(&staged, &unstaged);
-    if (staged == 0) { set_msg("Nothing staged to commit"); return; }
-    start_prompt("Commit message:", do_commit);
-}
-
-static void action_push(void) {
-    set_msg("Pushing...");
-    draw();
-    int ret = git_exec("git push");
-    if (ret == 0) set_msg("Pushed successfully");
-    else set_msg("Push failed (check remote/auth)");
-    load_log();
-}
-
-static void action_pull(void) {
-    set_msg("Fetching & pulling...");
-    draw();
-    int ret = git_exec("git pull");
-    if (ret == 0) { set_msg("Pulled successfully"); }
-    else set_msg("Pull failed");
-    load_status();
-    load_log();
-    load_branches();
-}
-
-static void do_stash(const char *msg) {
-    char cmd[512];
-    if (msg && msg[0])
-        snprintf(cmd, sizeof(cmd), "git stash push -m '%s'", msg);
-    else
-        snprintf(cmd, sizeof(cmd), "git stash push");
-    int ret = git_exec("%s", cmd);
-    if (ret == 0) { set_msg("Stashed changes"); load_status(); load_stash(); }
-    else set_msg("Stash failed (nothing to stash?)");
-}
-
-static void action_stash(void) {
-    start_prompt("Stash message (optional):", do_stash);
-}
-
-static void action_discard_file(void) {
-    if (g.file_count == 0) return;
-    GitFile *f = &g.files[g.file_sel];
-    if (f->status == FILE_UNTRACKED) {
-        git_exec("rm -- '%s'", f->path);
-        set_msg("Removed: %s", f->path);
-    } else {
-        git_exec("git checkout -- '%s'", f->path);
-        set_msg("Discarded: %s", f->path);
-    }
-    load_status();
-}
-
-static void action_open_diff_for_file(void) {
-    if (g.file_count == 0) return;
-    GitFile *f = &g.files[g.file_sel];
-    snprintf(g.diff_file, sizeof(g.diff_file), "%s", f->path);
-    g.diff_staged = f->staged;
-    load_diff(f->path, f->staged);
-    g.current_view = VIEW_DIFF;
-}
-
-static void action_open_diff_for_commit(void) {
-    if (g.commit_count == 0) return;
-    GitCommit *c = &g.commits[g.commit_sel];
-    
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "git show --stat %s 2>/dev/null | head -5", c->hash);
-    
-    snprintf(g.diff_file, sizeof(g.diff_file), "commit %s: %s", c->hash, c->subject);
-    g.diff_staged = false;
-    
-    /* Load commit diff */
-    g.diff_count = 0;
-    char gcmd[256];
-    snprintf(gcmd, sizeof(gcmd), "git show %s 2>/dev/null", c->hash);
-    char *out = git_run(gcmd);
-    if (out) {
-        char *line = out;
-        while (*line && g.diff_count < MAX_DIFF_LINES) {
-            char *nl = strchr(line, '\n');
-            size_t len = nl ? (size_t)(nl-line) : strlen(line);
-            DiffLine *dl = &g.diff_lines[g.diff_count];
-            if (len >= LINE_MAX_LEN) len = LINE_MAX_LEN-1;
-            memcpy(dl->line, line, len);
-            dl->line[len] = '\0';
-
-            if (dl->line[0] == '+') dl->type = 1;
-            else if (dl->line[0] == '-') dl->type = 2;
-            else if (dl->line[0] == '@') dl->type = 3;
-            else dl->type = 0;
-
-            g.diff_count++;
-            line = nl ? nl+1 : line+strlen(line);
-        }
-        free(out);
-    }
-    g.diff_scroll = 0;
-    g.current_view = VIEW_DIFF;
-}
-
-static void action_checkout_branch(void) {
-    if (g.branch_count == 0) return;
-    GitBranch *b = &g.branches[g.branch_sel];
-    
-    char name[256];
-    snprintf(name, sizeof(name), "%s", b->name);
-    
-    /* For remote branches, strip remote prefix */
-    char *slash = strchr(name, '/');
-    const char *local_name = slash ? slash+1 : name;
-    
-    int ret;
-    if (b->is_remote) {
-        ret = git_exec("git checkout -t %s", name);
-    } else {
-        ret = git_exec("git checkout %s", name);
-    }
-    
-    if (ret == 0) {
-        set_msg("Checked out: %s", local_name);
-        load_branch();
-        load_status();
-        load_branches();
-    } else {
-        set_msg("Checkout failed");
-    }
-}
-
-static void do_new_branch(const char *name) {
-    if (!name || !name[0]) { set_msg("Branch name required"); return; }
-    int ret = git_exec("git checkout -b '%s'", name);
-    if (ret == 0) {
-        set_msg("Created and checked out: %s", name);
-        load_branch();
-        load_branches();
-    } else {
-        set_msg("Failed to create branch");
-    }
-}
-
-static void action_new_branch(void) {
-    start_prompt("New branch name:", do_new_branch);
-}
-
-static void action_delete_branch(void) {
-    if (g.branch_count == 0) return;
-    GitBranch *b = &g.branches[g.branch_sel];
-    if (b->is_current) { set_msg("Cannot delete current branch"); return; }
-    
-    int ret;
-    if (b->is_remote) {
-        /* Extract remote/branch */
-        char remote[64] = "origin";
-        char bname[128];
-        snprintf(bname, sizeof(bname), "%s", b->name);
-        char *slash = strchr(bname, '/');
-        if (slash) {
-            *slash = '\0';
-            snprintf(remote, sizeof(remote), "%s", bname);
-            ret = git_exec("git push %s --delete '%s'", remote, slash+1);
-        } else {
-            ret = git_exec("git push origin --delete '%s'", bname);
-        }
-    } else {
-        ret = git_exec("git branch -d '%s'", b->name);
-    }
-    
-    if (ret == 0) { set_msg("Deleted: %s", b->name); load_branches(); }
-    else { set_msg("Delete failed (try -D for force delete)"); }
-}
-
-static void action_apply_stash(void) {
-    if (g.stash_count == 0) return;
-    int ret = git_exec("git stash apply stash@{%d}", g.stashes[g.stash_sel].index);
-    if (ret == 0) { set_msg("Applied stash@{%d}", g.stashes[g.stash_sel].index); load_status(); }
-    else set_msg("Stash apply failed");
-}
-
-static void action_pop_stash(void) {
-    if (g.stash_count == 0) return;
-    int ret = git_exec("git stash pop stash@{%d}", g.stashes[g.stash_sel].index);
-    if (ret == 0) { set_msg("Popped stash@{%d}", g.stashes[g.stash_sel].index); load_status(); load_stash(); }
-    else set_msg("Stash pop failed");
-}
-
-static void action_drop_stash(void) {
-    if (g.stash_count == 0) return;
-    int ret = git_exec("git stash drop stash@{%d}", g.stashes[g.stash_sel].index);
-    if (ret == 0) { set_msg("Dropped stash@{%d}", g.stashes[g.stash_sel].index); load_stash(); }
-    else set_msg("Stash drop failed");
-}
-
-static void reload_all(void) {
-    load_branch();
-    load_status();
-    load_log();
-    load_branches();
-    load_stash();
-    set_msg("Refreshed");
-}
-
-/* ─── Input reading ──────────────────────────────────────────── */
-
-typedef enum {
-    KEY_NONE = 0,
-    KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
-    KEY_PGUP, KEY_PGDN, KEY_HOME, KEY_END,
-    KEY_ENTER, KEY_ESC, KEY_BACKSPACE, KEY_DEL,
-    KEY_TAB, KEY_CTRL_A, KEY_CTRL_C, KEY_CTRL_U,
-    KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5,
-    KEY_CHAR
-} KeyType;
-
-typedef struct {
-    KeyType type;
-    char ch;
-} Key;
-
-static Key read_key(void) {
-    Key k = {KEY_NONE, 0};
-    
-    unsigned char buf[16];
-    int n = read(STDIN_FILENO, buf, sizeof(buf));
-    if (n <= 0) return k;
-
-    if (buf[0] == 0x1b) {
-        if (n == 1) { k.type = KEY_ESC; return k; }
-        if (buf[1] == '[') {
-            if (n == 3) {
-                switch (buf[2]) {
-                    case 'A': k.type = KEY_UP;    return k;
-                    case 'B': k.type = KEY_DOWN;  return k;
-                    case 'C': k.type = KEY_RIGHT; return k;
-                    case 'D': k.type = KEY_LEFT;  return k;
-                    case 'H': k.type = KEY_HOME;  return k;
-                    case 'F': k.type = KEY_END;   return k;
+    if(buf[0]==0x1b){
+        if(n==1){k.type=KEY_ESC;return k;}
+        if(buf[1]=='['){
+            if(n==3){
+                switch(buf[2]){
+                case 'A':k.type=KEY_UP;return k;
+                case 'B':k.type=KEY_DOWN;return k;
+                case 'C':k.type=KEY_RIGHT;return k;
+                case 'D':k.type=KEY_LEFT;return k;
+                case 'H':k.type=KEY_HOME;return k;
+                case 'F':k.type=KEY_END;return k;
+                case 'Z':k.type=KEY_SHIFT_TAB;return k;
                 }
             }
-            if (n >= 4 && buf[2] == '1' && buf[3] == ';') { /* modifier */ }
-            if (n == 4 && buf[3] == '~') {
-                switch (buf[2]) {
-                    case '1': k.type = KEY_HOME;  return k;
-                    case '4': k.type = KEY_END;   return k;
-                    case '5': k.type = KEY_PGUP;  return k;
-                    case '6': k.type = KEY_PGDN;  return k;
+            if(n>=4&&buf[n-1]=='~'){
+                switch(buf[2]){
+                case '1':k.type=KEY_HOME;return k;
+                case '3':k.type=KEY_DEL;return k;
+                case '4':k.type=KEY_END;return k;
+                case '5':k.type=KEY_PGUP;return k;
+                case '6':k.type=KEY_PGDN;return k;
                 }
             }
-            if (n == 5 && buf[4] == '~') {
-                if (buf[2]=='1' && buf[3]=='5') { k.type=KEY_F5; return k; }
+            if(buf[2]=='<'){
+                int btn=0,col=0,row=0; char end='M';
+                sscanf((char*)buf+3,"%d;%d;%d%c",&btn,&col,&row,&end);
+                k.type=KEY_MOUSE;
+                k.mouse.btn=btn; k.mouse.col=col; k.mouse.row=row;
+                k.mouse.release=(end=='m');
+                k.mouse.shift=(btn&4)!=0; k.mouse.ctrl=(btn&16)!=0;
+                return k;
             }
-            /* Mouse */
-            if (buf[2] == 'M') { return k; } /* ignore mouse */
+            if(buf[2]=='M'&&n>=6){
+                k.type=KEY_MOUSE;
+                k.mouse.btn=buf[3]-32; k.mouse.col=buf[4]-32; k.mouse.row=buf[5]-32;
+                return k;
+            }
         }
-        if (buf[1] == 'O') {
-            switch (buf[2]) {
-                case 'P': k.type = KEY_F1; return k;
-                case 'Q': k.type = KEY_F2; return k;
-                case 'R': k.type = KEY_F3; return k;
-                case 'S': k.type = KEY_F4; return k;
-            }
+        if(buf[1]=='O'){
+            switch(buf[2]){case 'P':k.type=KEY_F1;return k;case 'Q':k.type=KEY_F2;return k;
+                           case 'R':k.type=KEY_F3;return k;case 'S':k.type=KEY_F4;return k;}
         }
         return k;
     }
-
-    /* Control chars */
-    if (buf[0] == '\r' || buf[0] == '\n') { k.type = KEY_ENTER; return k; }
-    if (buf[0] == 127 || buf[0] == 8)     { k.type = KEY_BACKSPACE; return k; }
-    if (buf[0] == '\t') { k.type = KEY_TAB; return k; }
-    if (buf[0] == 1)    { k.type = KEY_CTRL_A; return k; }
-    if (buf[0] == 3)    { k.type = KEY_CTRL_C; return k; }
-    if (buf[0] == 21)   { k.type = KEY_CTRL_U; return k; }
-
-    if (buf[0] >= 32 && buf[0] < 127) {
-        k.type = KEY_CHAR;
-        k.ch = (char)buf[0];
-        return k;
+    switch(buf[0]){
+    case '\r':case '\n':k.type=KEY_ENTER;return k;
+    case 127:case 8:k.type=KEY_BACKSPACE;return k;
+    case '\t':k.type=KEY_TAB;return k;
+    case 1:k.type=KEY_CTRL_A;return k;
+    case 2:k.type=KEY_CTRL_B;return k;
+    case 3:k.type=KEY_CTRL_C;return k;
+    case 4:k.type=KEY_CTRL_D;return k;
+    case 5:k.type=KEY_CTRL_E;return k;
+    case 6:k.type=KEY_CTRL_F;return k;
+    case 11:k.type=KEY_CTRL_K;return k;
+    case 14:k.type=KEY_CTRL_N;return k;
+    case 16:k.type=KEY_CTRL_P;return k;
+    case 21:k.type=KEY_CTRL_U;return k;
+    case 23:k.type=KEY_CTRL_W;return k;
+    case 25:k.type=KEY_CTRL_Y;return k;
     }
-
+    if(buf[0]>=32&&buf[0]<127){k.type=KEY_CHAR;k.ch=(char)buf[0];return k;}
     return k;
 }
 
-/* ─── Event handling ─────────────────────────────────────────── */
-static void handle_prompt_key(Key k) {
-    switch (k.type) {
-        case KEY_ENTER:     prompt_confirm(); break;
-        case KEY_ESC:       prompt_cancel(); break;
-        case KEY_BACKSPACE: prompt_backspace(); break;
-        case KEY_CTRL_U:
-            g.prompt_buf[0] = '\0';
-            g.prompt_cursor = 0;
-            break;
-        case KEY_CHAR:      prompt_char(k.ch); break;
-        default: break;
+/* ================================================================
+   PROMPT
+================================================================ */
+static void prompt_start(const char *label,void(*cb)(const char*),bool obs){
+    G.in_prompt=true; snprintf(G.prompt_label,sizeof(G.prompt_label),"%s",label);
+    G.prompt_buf[0]='\0'; G.prompt_cursor=0; G.prompt_cb=cb; G.prompt_obscure=obs;
+}
+static void prompt_ins(char c){
+    int len=(int)strlen(G.prompt_buf);
+    if(len+1<INPUT_MAX){
+        memmove(&G.prompt_buf[G.prompt_cursor+1],&G.prompt_buf[G.prompt_cursor],len-G.prompt_cursor+1);
+        G.prompt_buf[G.prompt_cursor++]=c;
+    }
+}
+static void prompt_bksp(void){
+    if(!G.prompt_cursor)return;
+    int len=(int)strlen(G.prompt_buf);
+    memmove(&G.prompt_buf[G.prompt_cursor-1],&G.prompt_buf[G.prompt_cursor],len-G.prompt_cursor+1);
+    G.prompt_cursor--;
+}
+static void prompt_del(void){
+    int len=(int)strlen(G.prompt_buf);
+    if(G.prompt_cursor>=len)return;
+    memmove(&G.prompt_buf[G.prompt_cursor],&G.prompt_buf[G.prompt_cursor+1],len-G.prompt_cursor);
+}
+static void prompt_confirm(void){
+    G.in_prompt=false;
+    void(*cb)(const char*)=G.prompt_cb;
+    char copy[INPUT_MAX]; snprintf(copy,sizeof(copy),"%s",G.prompt_buf);
+    G.prompt_buf[0]='\0'; G.prompt_cursor=0; G.prompt_cb=NULL;
+    if(cb)cb(copy);
+}
+static void prompt_cancel(void){G.in_prompt=false;G.prompt_buf[0]='\0';G.prompt_cursor=0;G.prompt_cb=NULL;OK("Cancelled");}
+static void handle_prompt_key(Key k){
+    switch(k.type){
+    case KEY_ENTER:    prompt_confirm();break;
+    case KEY_ESC:      prompt_cancel();break;
+    case KEY_BACKSPACE:prompt_bksp();break;
+    case KEY_DEL:      prompt_del();break;
+    case KEY_LEFT:     if(G.prompt_cursor>0)G.prompt_cursor--;break;
+    case KEY_RIGHT:    if(G.prompt_buf[G.prompt_cursor])G.prompt_cursor++;break;
+    case KEY_HOME:case KEY_CTRL_A:G.prompt_cursor=0;break;
+    case KEY_END:      G.prompt_cursor=(int)strlen(G.prompt_buf);break;
+    case KEY_CTRL_U:   G.prompt_buf[0]='\0';G.prompt_cursor=0;break;
+    case KEY_CTRL_W:{
+        while(G.prompt_cursor>0&&G.prompt_buf[G.prompt_cursor-1]==' ')prompt_bksp();
+        while(G.prompt_cursor>0&&G.prompt_buf[G.prompt_cursor-1]!=' ')prompt_bksp();
+        break;
+    }
+    case KEY_CHAR:prompt_ins(k.ch);break;
+    default:break;
     }
 }
 
-static void move_selection(int *sel, int *scroll, int count, int delta, int visible) {
-    *sel = clamp(*sel + delta, 0, count > 0 ? count - 1 : 0);
-    if (*sel < *scroll) *scroll = *sel;
-    if (*sel >= *scroll + visible) *scroll = *sel - visible + 1;
+/* ================================================================
+   GIT ACTIONS
+================================================================ */
+static void action_stage(void){
+    if(!G.file_count)return;
+    GitFile *f=&G.files[G.file_sel];
+    if(f->staged){git_exec("git reset HEAD -- '%s'",f->path);OK("Unstaged: %s",f->path);}
+    else{
+        if(f->st==FS_DELETED)git_exec("git rm -- '%s'",f->path);
+        else git_exec("git add -- '%s'",f->path);
+        OK("Staged: %s",f->path);
+    }
+    load_status(); update_diff();
+}
+static void action_stage_all(void){git_exec("git add -A");OK("Staged all");load_status();update_diff();}
+static void action_unstage_all(void){git_exec("git reset HEAD");OK("Unstaged all");load_status();update_diff();}
+static void action_discard(void){
+    if(!G.file_count)return;
+    GitFile *f=&G.files[G.file_sel];
+    if(f->st==FS_UNTRACKED){git_exec("rm -f -- '%s'",f->path);OK("Removed: %s",f->path);}
+    else{git_exec("git checkout -- '%s'",f->path);OK("Discarded: %s",f->path);}
+    load_status(); update_diff();
 }
 
-static void handle_key(Key k) {
-    if (g.in_prompt) { handle_prompt_key(k); return; }
+static void do_commit(const char *msg){
+    if(!msg||!msg[0]){ERR("Empty message");return;}
+    char tmp[64];snprintf(tmp,sizeof(tmp),"/tmp/gitui_msg_XXXXXX");
+    int fd=mkstemp(tmp);if(fd<0){ERR("mkstemp failed");return;}
+    ssize_t w=write(fd,msg,strlen(msg));(void)w;close(fd);
+    int r=git_exec("git commit -F '%s'",tmp);unlink(tmp);
+    if(r==0){OK("Committed: %.60s",msg);load_status();load_log();}else ERR("Commit failed");
+}
+static void action_commit(void){
+    int s=0;for(int i=0;i<G.file_count;i++)if(G.files[i].staged)s++;
+    if(!s){ERR("Nothing staged");return;}
+    prompt_start("Commit message:",do_commit,false);
+}
+static void do_amend(const char *msg){
+    int r;
+    if(!msg||!msg[0]){r=git_exec("git commit --amend --no-edit");}
+    else{char tmp[64];snprintf(tmp,sizeof(tmp),"/tmp/gitui_amend_XXXXXX");
+         int fd=mkstemp(tmp);if(fd<0){ERR("mkstemp");return;}
+         ssize_t w=write(fd,msg,strlen(msg));(void)w;close(fd);
+         r=git_exec("git commit --amend -F '%s'",tmp);unlink(tmp);}
+    if(r==0){OK("Amended");load_log();}else ERR("Amend failed");
+}
+static void action_amend(void){prompt_start("Amend message (empty=keep):",do_amend,false);}
+static void action_push(void){OK("Pushing...");draw();int r=git_exec("git push");if(r==0)OK("Pushed");else ERR("Push failed");load_log();}
+static void action_pull(void){OK("Pulling...");draw();int r=git_exec("git pull");if(r==0)OK("Pulled");else ERR("Pull failed");reload_all();}
+static void do_stash(const char *msg){
+    char cmd[512];
+    if(msg&&msg[0])snprintf(cmd,sizeof(cmd),"git stash push -m '%s'",msg);
+    else snprintf(cmd,sizeof(cmd),"git stash push");
+    int r=git_exec("%s",cmd);
+    if(r==0){OK("Stashed");load_status();load_stash();}else ERR("Stash failed");
+}
+static void action_stash(void){prompt_start("Stash message (optional):",do_stash,false);}
+static void action_checkout(void){
+    if(!G.branch_count)return;
+    GitBranch *b=&G.branches[G.branch_sel];
+    int r=b->is_remote?git_exec("git checkout -t '%s'",b->name):git_exec("git checkout '%s'",b->name);
+    if(r==0){OK("Checked out: %s",b->name);load_branch();reload_all();}else ERR("Checkout failed");
+}
+static void do_new_branch(const char *name){
+    if(!name||!name[0]){ERR("Name required");return;}
+    int r=git_exec("git checkout -b '%s'",name);
+    if(r==0){OK("Created: %s",name);load_branch();load_branches();}else ERR("Branch failed");
+}
+static void action_new_branch(void){prompt_start("New branch name:",do_new_branch,false);}
+static void action_delete_branch(void){
+    if(!G.branch_count)return;
+    GitBranch *b=&G.branches[G.branch_sel];
+    if(b->is_current){ERR("Cannot delete current branch");return;}
+    int r;
+    if(b->is_remote){
+        char rn[64]="origin",bn[128];snprintf(bn,sizeof(bn),"%s",b->name);
+        char *sl=strchr(bn,'/');
+        if(sl){*sl='\0';snprintf(rn,sizeof(rn),"%s",bn);r=git_exec("git push '%s' --delete '%s'",rn,sl+1);}
+        else r=git_exec("git push origin --delete '%s'",bn);
+    }else r=git_exec("git branch -D '%s'",b->name);
+    if(r==0){OK("Deleted: %s",b->name);load_branches();}else ERR("Delete failed");
+}
+static void action_apply_stash(void){
+    if(!G.stash_count)return;
+    int r=git_exec("git stash apply stash@{%d}",G.stashes[G.stash_sel].index);
+    if(r==0){OK("Applied stash@{%d}",G.stashes[G.stash_sel].index);load_status();}else ERR("Apply failed");
+}
+static void action_pop_stash(void){
+    if(!G.stash_count)return;
+    int r=git_exec("git stash pop stash@{%d}",G.stashes[G.stash_sel].index);
+    if(r==0){OK("Popped stash@{%d}",G.stashes[G.stash_sel].index);load_status();load_stash();}else ERR("Pop failed");
+}
+static void action_drop_stash(void){
+    if(!G.stash_count)return;
+    int r=git_exec("git stash drop stash@{%d}",G.stashes[G.stash_sel].index);
+    if(r==0){OK("Dropped stash@{%d}",G.stashes[G.stash_sel].index);load_stash();}else ERR("Drop failed");
+}
 
-    /* Global keys */
-    if (k.type == KEY_CHAR) {
-        switch (k.ch) {
-            case '1': g.current_view = VIEW_STATUS; return;
-            case '2': g.current_view = VIEW_LOG; return;
-            case '3': g.current_view = VIEW_DIFF; return;
-            case '4': g.current_view = VIEW_BRANCHES; return;
-            case '5': g.current_view = VIEW_STASH; return;
-            case '?': g.current_view = (g.current_view == VIEW_HELP) ? VIEW_STATUS : VIEW_HELP; return;
-            case 'q':
-                if (g.current_view == VIEW_DIFF)  { g.current_view = VIEW_STATUS; return; }
-                if (g.current_view == VIEW_HELP)  { g.current_view = VIEW_STATUS; return; }
-                g.running = false; return;
-            case 'R': reload_all(); return;
-            case 'c': action_commit(); return;
-            case 'P': action_push(); return;
-            case 'f': action_pull(); return;
-            case 's': action_stash(); return;
-        }
-    }
-    if (k.type == KEY_TAB) {
-        g.current_view = (View)((g.current_view + 1) % VIEW_COUNT);
-        return;
-    }
-    if (k.type == KEY_ESC) {
-        if (g.current_view == VIEW_DIFF || g.current_view == VIEW_HELP)
-            g.current_view = VIEW_STATUS;
-        return;
-    }
+/* ================================================================
+   SELECTION HELPER (Vi-count aware)
+================================================================ */
+static void msel(int *sel,int *scr,int cnt,int d,int vis){
+    int n=G.vi_count>0?G.vi_count:1;
+    *sel=iclamp(*sel+d*n,0,cnt>0?cnt-1:0);
+    if(*sel<*scr)*scr=*sel;
+    if(*sel>=*scr+vis)*scr=*sel-vis+1;
+    G.vi_count=0;
+}
 
-    /* View-specific */
-    int visible = g.rows - 5;
+/* ================================================================
+   MOUSE HANDLER
+================================================================ */
+static void handle_mouse(MouseEvt m){
+    bool su=(m.btn&64)&&!(m.btn&1);
+    bool sd=(m.btn&64)&&(m.btn&1);
+    bool cl=!su&&!sd&&!m.release&&(m.btn&3)!=3;
+    int ct=2;
 
-    switch (g.current_view) {
-        case VIEW_STATUS: {
-            int cnt = g.file_count;
-            switch (k.type) {
-                case KEY_UP:    move_selection(&g.file_sel, &g.file_scroll, cnt, -1, visible); break;
-                case KEY_DOWN:  move_selection(&g.file_sel, &g.file_scroll, cnt,  1, visible); break;
-                case KEY_HOME:  g.file_sel = 0; g.file_scroll = 0; break;
-                case KEY_END:   g.file_sel = cnt > 0 ? cnt-1 : 0; break;
-                case KEY_ENTER: action_open_diff_for_file(); break;
-                case KEY_CHAR:
-                    if (k.ch == ' ') action_stage_file();
-                    else if (k.ch == 'a') action_stage_all();
-                    else if (k.ch == 'u') action_unstage_all();
-                    else if (k.ch == 'd') action_discard_file();
-                    else if (k.ch == 'j') move_selection(&g.file_sel, &g.file_scroll, cnt, 1, visible);
-                    else if (k.ch == 'k') move_selection(&g.file_sel, &g.file_scroll, cnt, -1, visible);
-                    else if (k.ch == 'g') { g.file_sel = 0; g.file_scroll = 0; }
-                    else if (k.ch == 'G') g.file_sel = cnt > 0 ? cnt-1 : 0;
-                    break;
-                default: break;
-            }
-            /* Update diff when selection changes */
-            if (g.file_count > 0 && g.file_sel < g.file_count) {
-                GitFile *f = &g.files[g.file_sel];
-                if (strcmp(g.diff_file, f->path) != 0 || g.diff_staged != f->staged) {
-                    snprintf(g.diff_file, sizeof(g.diff_file), "%s", f->path);
-                    g.diff_staged = f->staged;
-                    load_diff(f->path, f->staged);
+    if(G.current_view==VIEW_STATUS){
+        layout();
+        bool in_l=(m.col>=1&&m.col<=G.lw);
+        bool in_r=(m.col>G.lw);
+        bool in_top=(m.row>=ct&&m.row<ct+G.lh_chg);
+        bool in_bot=(m.row>=ct+G.lh_chg);
+
+        if(in_l&&in_top){
+            if(cl)G.focus=FOCUS_CHANGES;
+            if(su)G.file_sel=imax(0,G.file_sel-1);
+            if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+1);
+            if(cl){
+                /* Simple row→file mapping: count visible rows in changes pane */
+                int row=m.row-(ct+2); /* skip box top + staged header */
+                int vis=0; int staged_shown=0,unstaged_shown=0;
+                for(int i=0;i<G.file_count;i++){
+                    if(G.files[i].staged){if(!staged_shown){staged_shown=1;vis++;}if(vis-1==row){G.file_sel=i;break;}vis++;}
+                }
+                vis++; /* spacer */
+                for(int i=0;i<G.file_count;i++){
+                    if(!G.files[i].staged){if(!unstaged_shown){unstaged_shown=1;vis++;}if(vis-1==row){G.file_sel=i;break;}vis++;}
                 }
             }
-            break;
-        }
-        case VIEW_LOG: {
-            int cnt = g.commit_count;
-            switch (k.type) {
-                case KEY_UP:   move_selection(&g.commit_sel, &g.commit_scroll, cnt, -1, visible); break;
-                case KEY_DOWN: move_selection(&g.commit_sel, &g.commit_scroll, cnt,  1, visible); break;
-                case KEY_PGUP: move_selection(&g.commit_sel, &g.commit_scroll, cnt, -visible/2, visible); break;
-                case KEY_PGDN: move_selection(&g.commit_sel, &g.commit_scroll, cnt,  visible/2, visible); break;
-                case KEY_ENTER: action_open_diff_for_commit(); break;
-                case KEY_CHAR:
-                    if (k.ch == 'j') move_selection(&g.commit_sel, &g.commit_scroll, cnt, 1, visible);
-                    else if (k.ch == 'k') move_selection(&g.commit_sel, &g.commit_scroll, cnt, -1, visible);
-                    else if (k.ch == 'g') { g.commit_sel = 0; g.commit_scroll = 0; }
-                    else if (k.ch == 'G') g.commit_sel = cnt > 0 ? cnt-1 : 0;
-                    break;
-                default: break;
-            }
-            /* Update diff for hovered commit */
-            if (g.commit_count > 0) {
-                GitCommit *c = &g.commits[g.commit_sel];
-                char expected[32];
-                snprintf(expected, sizeof(expected), "commit %s:", c->hash);
-                if (strncmp(g.diff_file, expected, strlen(expected)) != 0) {
-                    action_open_diff_for_commit();
-                    g.current_view = VIEW_LOG; /* don't switch view */
+            update_diff();
+        } else if(in_l&&in_bot){
+            if(cl)G.focus=FOCUS_GRAPH;
+            int vis=G.lh_gph-2;
+            if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis);
+            if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis);
+            if(cl){
+                int row=m.row-(ct+G.lh_chg+1);
+                int t=G.commit_scroll+row;
+                if(t>=0&&t<G.commit_count){
+                    G.commit_sel=t;
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[t].hash,G.commits[t].subject);
+                    load_diff_commit(G.commits[t].hash);
                 }
             }
-            break;
+        } else if(in_r){
+            if(cl)G.focus=FOCUS_DIFF;
+            if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
+            if(sd)G.diff_scroll+=3;
         }
-        case VIEW_DIFF: {
-            switch (k.type) {
-                case KEY_UP:   g.diff_scroll -= 1; break;
-                case KEY_DOWN: g.diff_scroll += 1; break;
-                case KEY_PGUP: g.diff_scroll -= visible; break;
-                case KEY_PGDN: g.diff_scroll += visible; break;
-                case KEY_HOME: g.diff_scroll = 0; break;
-                case KEY_END:  g.diff_scroll = g.diff_count; break;
-                case KEY_CHAR:
-                    if (k.ch == 'j') g.diff_scroll++;
-                    else if (k.ch == 'k') g.diff_scroll--;
-                    else if (k.ch == 'g') g.diff_scroll = 0;
-                    else if (k.ch == 'G') g.diff_scroll = g.diff_count;
-                    break;
-                default: break;
-            }
-            if (g.diff_scroll < 0) g.diff_scroll = 0;
-            if (g.diff_scroll > g.diff_count) g.diff_scroll = g.diff_count;
-            break;
+    } else if(G.current_view==VIEW_LOG){
+        int lh=(G.rows-2)*55/100;
+        bool in_log=(m.row<ct+lh);
+        int vis=lh-2;
+        if(in_log){
+            if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis);
+            if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis);
+            if(cl){int t=G.commit_scroll+(m.row-ct-1);if(t>=0&&t<G.commit_count){G.commit_sel=t;snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[t].hash,G.commits[t].subject);load_diff_commit(G.commits[t].hash);}}
+        } else {
+            if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
+            if(sd)G.diff_scroll+=3;
         }
-        case VIEW_BRANCHES: {
-            int cnt = g.branch_count;
-            switch (k.type) {
-                case KEY_UP:   move_selection(&g.branch_sel, &g.branch_scroll, cnt, -1, visible); break;
-                case KEY_DOWN: move_selection(&g.branch_sel, &g.branch_scroll, cnt,  1, visible); break;
-                case KEY_ENTER: action_checkout_branch(); break;
-                case KEY_CHAR:
-                    if (k.ch == 'j') move_selection(&g.branch_sel, &g.branch_scroll, cnt, 1, visible);
-                    else if (k.ch == 'k') move_selection(&g.branch_sel, &g.branch_scroll, cnt, -1, visible);
-                    else if (k.ch == 'n') action_new_branch();
-                    else if (k.ch == 'D') action_delete_branch();
-                    break;
-                default: break;
-            }
-            break;
-        }
-        case VIEW_STASH: {
-            int cnt = g.stash_count;
-            switch (k.type) {
-                case KEY_UP:   move_selection(&g.stash_sel, &(int){0}, cnt, -1, visible); break;
-                case KEY_DOWN: move_selection(&g.stash_sel, &(int){0}, cnt,  1, visible); break;
-                case KEY_ENTER: action_apply_stash(); break;
-                case KEY_CHAR:
-                    if (k.ch == 'j') move_selection(&g.stash_sel, &(int){0}, cnt, 1, visible);
-                    else if (k.ch == 'k') move_selection(&g.stash_sel, &(int){0}, cnt, -1, visible);
-                    else if (k.ch == 'p') action_pop_stash();
-                    else if (k.ch == 'D') action_drop_stash();
-                    break;
-                default: break;
-            }
-            break;
-        }
-        case VIEW_HELP: {
-            if (k.type == KEY_CHAR && k.ch == 'q') g.current_view = VIEW_STATUS;
-            break;
-        }
-        default: break;
+    } else if(G.current_view==VIEW_BRANCHES){
+        int vis=G.rows-4;
+        if(su)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,-1,vis);
+        if(sd)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,1,vis);
+        if(cl){int t=G.branch_scroll+(m.row-ct-2);if(t>=0&&t<G.branch_count)G.branch_sel=t;}
+    } else if(G.current_view==VIEW_STASH){
+        if(su)G.stash_sel=imax(0,G.stash_sel-1);
+        if(sd)G.stash_sel=imin(G.stash_count>0?G.stash_count-1:0,G.stash_sel+1);
+        if(cl){int t=m.row-ct-1;if(t>=0&&t<G.stash_count)G.stash_sel=t;}
     }
 }
 
-/* ─── Check if in git repo ───────────────────────────────────── */
-static bool in_git_repo(void) {
-    char *out = git_run("git rev-parse --git-dir 2>/dev/null");
-    if (out && out[0]) { free(out); return true; }
-    free(out);
+/* ================================================================
+   VI MODE PREPROCESSOR
+================================================================ */
+static bool vi_pre(Key *k){
+    if(!G.vi_enabled)return false;
+    if(G.vi_mode==VIMODE_INSERT){
+        if(k->type==KEY_ESC){G.vi_mode=VIMODE_NORMAL;return true;}
+        return false;
+    }
+    /* Normal mode */
+    if(k->type==KEY_CHAR){
+        if(k->ch>='1'&&k->ch<='9'&&!G.vi_count){G.vi_count=k->ch-'0';return true;}
+        if(k->ch>='0'&&k->ch<='9'&&G.vi_count){G.vi_count=G.vi_count*10+(k->ch-'0');return true;}
+        if(k->ch=='i'||k->ch=='a'){G.vi_mode=VIMODE_INSERT;return true;}
+        if(k->ch=='j'){k->type=KEY_DOWN;return false;}
+        if(k->ch=='k'){k->type=KEY_UP;return false;}
+        if(k->ch=='G'){k->type=KEY_END;return false;}
+        if(k->ch=='g'){
+            if(G.vi_gg_pending){k->type=KEY_HOME;G.vi_gg_pending=false;return false;}
+            G.vi_gg_pending=true;return true;
+        }
+        G.vi_gg_pending=false;
+    }
+    if(k->type==KEY_CTRL_F){k->type=KEY_PGDN;return false;}
+    if(k->type==KEY_CTRL_B){k->type=KEY_PGUP;return false;}
+    if(k->type==KEY_CTRL_D){k->type=KEY_PGDN;G.vi_count=imax(1,G.vi_count/2)+1;return false;}
+    if(k->type==KEY_CTRL_U){k->type=KEY_PGUP;G.vi_count=imax(1,G.vi_count/2)+1;return false;}
     return false;
 }
 
-/* ─── Main ───────────────────────────────────────────────────── */
-int main(void) {
-    /* Check environment */
-    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
-        fprintf(stderr, "gitui: requires a terminal\n");
-        return 1;
+/* ================================================================
+   MAIN KEY HANDLER
+================================================================ */
+static void handle_key(Key k){
+    if(G.in_prompt){handle_prompt_key(k);return;}
+    if(k.type==KEY_MOUSE){handle_mouse(k.mouse);return;}
+    if(vi_pre(&k))return;
+
+    int vis=G.rows-5;
+
+    /* Global */
+    if(k.type==KEY_CHAR){
+        switch(k.ch){
+        case '1':G.current_view=VIEW_STATUS;return;
+        case '2':G.current_view=VIEW_LOG;return;
+        case '3':G.current_view=VIEW_BRANCHES;return;
+        case '4':G.current_view=VIEW_STASH;return;
+        case '?':G.current_view=(G.current_view==VIEW_HELP)?VIEW_STATUS:VIEW_HELP;return;
+        case 'q':
+            if(G.current_view==VIEW_HELP){G.current_view=VIEW_STATUS;return;}
+            if(G.focus==FOCUS_DIFF&&G.current_view==VIEW_STATUS){G.focus=FOCUS_CHANGES;return;}
+            G.running=false;return;
+        case 'R':reload_all();return;
+        case 'c':action_commit();return;
+        case 'A':action_amend();return;
+        case 'P':action_push();return;
+        case 'f':action_pull();return;
+        case 'T':G.theme_idx=(G.theme_idx+1)%NTHEMES;OK("Theme: %s",TH->name);return;
+        case 'V':G.vi_enabled=!G.vi_enabled;G.vi_mode=VIMODE_NORMAL;G.vi_count=0;
+                 OK("Vi mode: %s",G.vi_enabled?"ON":"OFF");return;
+        }
+    }
+    if(k.type==KEY_ESC){
+        if(G.current_view==VIEW_HELP){G.current_view=VIEW_STATUS;return;}
+        if(G.focus==FOCUS_DIFF){G.focus=FOCUS_CHANGES;return;}
+        G.vi_count=0;G.vi_gg_pending=false;return;
+    }
+    if(k.type==KEY_TAB){
+        if(G.current_view==VIEW_STATUS)G.focus=(FocusPane)((G.focus+1)%3);
+        else G.current_view=(View)((G.current_view+1)%VIEW_COUNT);
+        return;
+    }
+    if(k.type==KEY_SHIFT_TAB){
+        if(G.current_view==VIEW_STATUS)G.focus=(FocusPane)((G.focus+2)%3);
+        else G.current_view=(View)((G.current_view+VIEW_COUNT-1)%VIEW_COUNT);
+        return;
     }
 
-    if (!in_git_repo()) {
-        fprintf(stderr, "gitui: not a git repository\n");
-        return 1;
+    switch(G.current_view){
+    /* ──── STATUS ──── */
+    case VIEW_STATUS:{
+        if(k.type==KEY_LEFT||(k.type==KEY_CHAR&&k.ch=='h')){
+            if(G.focus==FOCUS_DIFF)G.focus=FOCUS_GRAPH;
+            else if(G.focus==FOCUS_GRAPH)G.focus=FOCUS_CHANGES;
+            return;
+        }
+        if(k.type==KEY_RIGHT||(k.type==KEY_CHAR&&k.ch=='l')){
+            if(G.focus==FOCUS_CHANGES)G.focus=FOCUS_GRAPH;
+            else if(G.focus==FOCUS_GRAPH)G.focus=FOCUS_DIFF;
+            return;
+        }
+        if(G.focus==FOCUS_CHANGES){
+            int cnt=G.file_count;
+            switch(k.type){
+            case KEY_UP:   msel(&G.file_sel,&G.file_scroll,cnt,-1,vis);break;
+            case KEY_DOWN: msel(&G.file_sel,&G.file_scroll,cnt, 1,vis);break;
+            case KEY_PGUP: msel(&G.file_sel,&G.file_scroll,cnt,-vis/2,vis);break;
+            case KEY_PGDN: msel(&G.file_sel,&G.file_scroll,cnt, vis/2,vis);break;
+            case KEY_HOME: G.file_sel=0;G.file_scroll=0;break;
+            case KEY_END:  G.file_sel=cnt>0?cnt-1:0;break;
+            case KEY_ENTER:G.focus=FOCUS_DIFF;break;
+            case KEY_CHAR:
+                if(k.ch==' ')action_stage();
+                else if(k.ch=='a')action_stage_all();
+                else if(k.ch=='u')action_unstage_all();
+                else if(k.ch=='d')action_discard();
+                else if(k.ch=='='||k.ch=='>')G.focus=FOCUS_DIFF;
+                else if(k.ch=='s')action_stash();
+                break;
+            default:break;
+            }
+            update_diff();
+        } else if(G.focus==FOCUS_GRAPH){
+            int cnt=G.commit_count,gvis=G.lh_gph-2;
+            switch(k.type){
+            case KEY_UP:   msel(&G.commit_sel,&G.commit_scroll,cnt,-1,gvis);break;
+            case KEY_DOWN: msel(&G.commit_sel,&G.commit_scroll,cnt, 1,gvis);break;
+            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-gvis/2,gvis);break;
+            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, gvis/2,gvis);break;
+            case KEY_HOME: G.commit_sel=0;G.commit_scroll=0;break;
+            case KEY_END:  G.commit_sel=cnt>0?cnt-1:0;break;
+            case KEY_ENTER:
+                if(G.commit_count>0){
+                    GitCommit *c=&G.commits[G.commit_sel];
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                    G.diff_staged=false;load_diff_commit(c->hash);G.focus=FOCUS_DIFF;
+                }
+                break;
+            default:break;
+            }
+        } else { /* FOCUS_DIFF */
+            int dv=G.rows-4;
+            switch(k.type){
+            case KEY_UP:   G.diff_scroll=imax(0,G.diff_scroll-1);break;
+            case KEY_DOWN: G.diff_scroll++;break;
+            case KEY_PGUP: G.diff_scroll=imax(0,G.diff_scroll-dv);break;
+            case KEY_PGDN: G.diff_scroll+=dv;break;
+            case KEY_HOME: G.diff_scroll=0;break;
+            case KEY_END:  G.diff_scroll=G.diff_count;break;
+            case KEY_CHAR:
+                if(k.ch=='s'||k.ch=='S')G.diff_sidebyside=!G.diff_sidebyside;
+                else if(k.ch=='['||k.ch=='h')G.diff_hscroll=imax(0,G.diff_hscroll-4);
+                else if(k.ch==']'||k.ch=='l')G.diff_hscroll+=4;
+                break;
+            default:break;
+            }
+        }
+        break;
     }
+    /* ──── LOG ──── */
+    case VIEW_LOG:{
+        int lh=(G.rows-2)*55/100-2;
+        bool df=(G.focus==FOCUS_DIFF);
+        if(k.type==KEY_LEFT||k.type==KEY_RIGHT){G.focus=(G.focus==FOCUS_DIFF)?FOCUS_CHANGES:FOCUS_DIFF;return;}
+        if(!df){
+            int cnt=G.commit_count;
+            switch(k.type){
+            case KEY_UP:   msel(&G.commit_sel,&G.commit_scroll,cnt,-1,lh);break;
+            case KEY_DOWN: msel(&G.commit_sel,&G.commit_scroll,cnt, 1,lh);break;
+            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-lh/2,lh);break;
+            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, lh/2,lh);break;
+            case KEY_HOME: G.commit_sel=0;G.commit_scroll=0;break;
+            case KEY_END:  G.commit_sel=cnt>0?cnt-1:0;break;
+            case KEY_ENTER:
+                if(G.commit_count>0){
+                    GitCommit *c=&G.commits[G.commit_sel];
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                    load_diff_commit(c->hash);G.focus=FOCUS_DIFF;
+                }
+                break;
+            case KEY_CHAR:if(k.ch=='n')action_new_branch();break;
+            default:break;
+            }
+            /* auto-preview */
+            if(G.commit_count>0){
+                GitCommit *c=&G.commits[G.commit_sel];
+                char exp[24];snprintf(exp,sizeof(exp),"commit %s:",c->hash);
+                if(strncmp(G.diff_title,exp,strlen(exp))!=0){
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                    load_diff_commit(c->hash);
+                }
+            }
+        } else {
+            int dv=G.rows-4;
+            switch(k.type){
+            case KEY_UP:   G.diff_scroll=imax(0,G.diff_scroll-1);break;
+            case KEY_DOWN: G.diff_scroll++;break;
+            case KEY_PGUP: G.diff_scroll=imax(0,G.diff_scroll-dv);break;
+            case KEY_PGDN: G.diff_scroll+=dv;break;
+            case KEY_CHAR:if(k.ch=='s')G.diff_sidebyside=!G.diff_sidebyside;break;
+            default:break;
+            }
+        }
+        break;
+    }
+    /* ──── BRANCHES ──── */
+    case VIEW_BRANCHES:{
+        int cnt=G.branch_count;
+        switch(k.type){
+        case KEY_UP:   msel(&G.branch_sel,&G.branch_scroll,cnt,-1,vis);break;
+        case KEY_DOWN: msel(&G.branch_sel,&G.branch_scroll,cnt, 1,vis);break;
+        case KEY_PGUP: msel(&G.branch_sel,&G.branch_scroll,cnt,-vis/2,vis);break;
+        case KEY_PGDN: msel(&G.branch_sel,&G.branch_scroll,cnt, vis/2,vis);break;
+        case KEY_HOME: G.branch_sel=0;G.branch_scroll=0;break;
+        case KEY_END:  G.branch_sel=cnt>0?cnt-1:0;break;
+        case KEY_ENTER:action_checkout();break;
+        case KEY_CHAR:if(k.ch=='n')action_new_branch();else if(k.ch=='D')action_delete_branch();break;
+        default:break;
+        }
+        break;
+    }
+    /* ──── STASH ──── */
+    case VIEW_STASH:{
+        int cnt=G.stash_count;
+        int dummy=0;
+        switch(k.type){
+        case KEY_UP:   msel(&G.stash_sel,&dummy,cnt,-1,vis);break;
+        case KEY_DOWN: msel(&G.stash_sel,&dummy,cnt, 1,vis);break;
+        case KEY_ENTER:action_apply_stash();break;
+        case KEY_CHAR:
+            if(k.ch=='p')action_pop_stash();
+            else if(k.ch=='D')action_drop_stash();
+            else if(k.ch=='s')action_stash();
+            break;
+        default:break;
+        }
+        break;
+    }
+    case VIEW_HELP:if(k.type==KEY_CHAR&&k.ch=='q')G.current_view=VIEW_STATUS;break;
+    default:break;
+    }
+}
 
-    /* Init state */
-    memset(&g, 0, sizeof(g));
-    g.running = true;
-    g.current_view = VIEW_STATUS;
-    g.show_unstaged = true;
+/* ================================================================
+   MAIN
+================================================================ */
+static bool in_git_repo(void){
+    char *o=git_run("git rev-parse --git-dir 2>/dev/null");
+    bool ok=o&&o[0]; free(o); return ok;
+}
 
-    /* Signals */
-    signal(SIGWINCH, sigwinch_handler);
-    signal(SIGINT,   sigint_handler);
-    signal(SIGTERM,  sigint_handler);
-    signal(SIGPIPE,  SIG_IGN);
+int main(int argc, char **argv){
+    (void)argc;(void)argv;
+    if(!isatty(STDIN_FILENO)||!isatty(STDOUT_FILENO)){fprintf(stderr,"gitui: requires a terminal\n");return 1;}
+    if(!in_git_repo()){fprintf(stderr,"gitui: not a git repository\n");return 1;}
 
-    /* Terminal setup */
+    memset(&G,0,sizeof(G));
+    G.running=true; G.current_view=VIEW_STATUS; G.focus=FOCUS_CHANGES;
+    G.theme_idx=0; G.vi_enabled=false; G.vi_mode=VIMODE_NORMAL;
+    G.diff_sidebyside=true;
+
+    signal(SIGWINCH,sig_winch);
+    signal(SIGINT, sig_int);
+    signal(SIGTERM,sig_int);
+    signal(SIGPIPE,SIG_IGN);
+
     get_winsize();
     term_raw();
-    printf(ALT_SCREEN HIDE_CURSOR);
+    printf(T_ALT T_HIDE T_MOUSE_ON);
     fflush(stdout);
 
-    /* Initial data load */
-    load_repo_root();
-    load_branch();
-    load_status();
-    load_log();
-    load_branches();
-    load_stash();
+    load_branch(); load_status(); load_log(); load_branches(); load_stash();
+    update_diff();
 
-    /* Auto-load diff for first file */
-    if (g.file_count > 0) {
-        snprintf(g.diff_file, sizeof(g.diff_file), "%s", g.files[0].path);
-        g.diff_staged = g.files[0].staged;
-        load_diff(g.diff_file, g.diff_staged);
-    }
+    OK("gitui v%s — Tab:focus  T:theme  V:vi-mode  s:side-by-side  ?:help  q:quit", VERSION);
 
-    set_msg("Welcome to gitui v" VERSION " — press ? for help");
-
-    /* Main loop */
-    while (g.running) {
-        if (g_resize) {
-            g_resize = 0;
-            get_winsize();
-        }
+    while(G.running){
+        if(g_resize){g_resize=0;get_winsize();}
         draw();
-        Key k = read_key();
-        if (k.type != KEY_NONE) handle_key(k);
+        Key k=read_key();
+        if(k.type!=KEY_NONE)handle_key(k);
     }
 
-    /* Cleanup */
-    printf(NORM_SCREEN SHOW_CURSOR MOUSE_OFF);
+    printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
     term_restore();
-    printf("Thanks for using gitui!\n");
+    printf("gitui — bye!\n");
     return 0;
 }
