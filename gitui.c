@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.7.4"
+#define VERSION        "2.7.5"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -336,14 +336,16 @@ static void put_cell(int r, int c, const char *s){
     Cell *cell = &G.back.cells[(r-1)*G.cols + (c-1)];
     memset(cell->ch, 0, 8);
     if(s && *s){
-        int i=0; while(*s && i<7) cell->ch[i++] = *s++;
+        if((unsigned char)*s < 32 && *s != '\x1b') cell->ch[0] = ' ';
+        else {
+            int i=0; while(s[i] && i<7) { cell->ch[i] = s[i]; i++; }
+        }
     } else {
         cell->ch[0] = ' ';
     }
     cell->fg = G.cur_fg; cell->bg = G.cur_bg;
     cell->bold = G.cur_bold; cell->dim = G.cur_dim; cell->italic = G.cur_italic;
     cell->under = G.cur_under; cell->rev = G.cur_rev;
-    G.cur_c = c + 1;
 }
 
 static void put_char(int r, int c, char ch){
@@ -379,28 +381,30 @@ static void draw_flush(void){
                 printf(CSI "%d;%dH", r, c);
             }
             
-            bool attr_changed = (b->bold != last_bold || b->dim != last_dim || 
-                                b->italic != last_italic || b->under != last_under || b->rev != last_rev);
-            bool fg_changed = (memcmp(&b->fg, &last_fg, sizeof(Color)) != 0);
-            bool bg_changed = (memcmp(&b->bg, &last_bg, sizeof(Color)) != 0);
+            bool attr_change = (b->bold != last_bold || b->dim != last_dim || b->italic != last_italic || b->under != last_under || b->rev != last_rev);
+            bool color_change = (memcmp(&b->fg, &last_fg, sizeof(Color)) != 0 || memcmp(&b->bg, &last_bg, sizeof(Color)) != 0);
 
-            if(attr_changed || fg_changed || bg_changed){
-                printf(CSI "0m");
-                /* After reset, all attributes are unknown/default */
-                last_fg.r = last_fg.g = last_fg.b = -1;
-                last_bg.r = last_bg.g = last_bg.b = -1;
-                last_bold = last_dim = last_italic = last_under = last_rev = false;
-
-                printf(CSI "38;2;%d;%d;%dm", b->fg.r, b->fg.g, b->fg.b);
-                printf(CSI "48;2;%d;%d;%dm", b->bg.r, b->bg.g, b->bg.b);
-                if(b->bold) printf(T_BOLD);
-                if(b->dim) printf(T_DIM);
-                if(b->italic) printf(T_ITALIC);
-                if(b->under) printf(T_UNDER);
-                if(b->rev) printf(T_REVERSE);
-                last_fg = b->fg; last_bg = b->bg;
-                last_bold=b->bold; last_dim=b->dim; last_italic=b->italic;
-                last_under=b->under; last_rev=b->rev;
+            if(attr_change || color_change){
+                if((last_bold && !b->bold) || (last_dim && !b->dim) || (last_italic && !b->italic) || (last_under && !b->under) || (last_rev && !b->rev)){
+                    printf(CSI "0m");
+                    last_fg.r = last_fg.g = last_fg.b = -1;
+                    last_bg.r = last_bg.g = last_bg.b = -1;
+                    last_bold = last_dim = last_italic = last_under = last_rev = false;
+                }
+                
+                if(memcmp(&b->fg, &last_fg, sizeof(Color)) != 0){
+                    printf(CSI "38;2;%d;%d;%dm", b->fg.r, b->fg.g, b->fg.b);
+                    last_fg = b->fg;
+                }
+                if(memcmp(&b->bg, &last_bg, sizeof(Color)) != 0){
+                    printf(CSI "48;2;%d;%d;%dm", b->bg.r, b->bg.g, b->bg.b);
+                    last_bg = b->bg;
+                }
+                if(b->bold && !last_bold) { printf(T_BOLD); last_bold = true; }
+                if(b->dim && !last_dim) { printf(T_DIM); last_dim = true; }
+                if(b->italic && !last_italic) { printf(T_ITALIC); last_italic = true; }
+                if(b->under && !last_under) { printf(T_UNDER); last_under = true; }
+                if(b->rev && !last_rev) { printf(T_REVERSE); last_rev = true; }
             }
             
             if(b->ch[0]) fputs(b->ch, stdout); else putchar(' ');
@@ -411,7 +415,6 @@ static void draw_flush(void){
     fflush(stdout);
 }
 
-/* Print string padded/truncated to exactly w visible chars */
 static void ppad(const char *s,int w){
     if(w<=0)return;
     int vis=0;
@@ -458,23 +461,20 @@ static void ppad(const char *s,int w){
         char tmp[8] = {0};
         for(int i=0; i<len && *s; i++) tmp[i] = *s++;
         put_cell(G.cur_r, G.cur_c, tmp);
-        vis++;
+        G.cur_c++; vis++;
     }
     if(truncated && w >= 1){
         put_cell(G.cur_r, G.cur_c, "…");
-        vis++;
+        G.cur_c++; vis++;
     }
-    while(vis<w){put_cell(G.cur_r, G.cur_c, " "); vis++;}
+    while(vis<w){put_cell(G.cur_r, G.cur_c, " "); G.cur_c++; vis++;}
 }
 
-/* ================================================================
-   LAYOUT
-================================================================ */
 static void layout(void){
     if(G.lw_custom > 0) G.lw = iclamp(G.lw_custom, 20, G.cols-20);
     else G.lw=imax(26,imin(48,G.cols*32/100));
     
-    G.rx=G.lw; G.rw=G.cols-G.lw+1;
+    G.rx=G.lw+1; G.rw=G.cols-G.lw;
     int ch=G.rows-2;
     
     if(G.lh_chg_custom > 0) G.lh_chg = iclamp(G.lh_chg_custom, 4, ch-4);
