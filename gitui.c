@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.0.1"
+#define VERSION        "2.0.2"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1720,11 +1720,16 @@ int main(int argc, char **argv){
 
     OK("gitui v%s — Tab:focus  T:theme  V:vi-mode  s:side-by-side  ?:help  q:quit", VERSION);
 
+    draw();
     while(G.running){
-        if(g_resize){g_resize=0;get_winsize();printf(T_CLEAR);}
-        draw();
         Key k=read_key();
-        if(k.type!=KEY_NONE)handle_key(k);
+        if(k.type!=KEY_NONE){
+            handle_key(k);
+            draw();
+        } else if(g_resize){
+            g_resize=0; get_winsize(); printf(T_CLEAR);
+            draw();
+        }
     }
 
     printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
