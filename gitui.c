@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.1.0"
+#define VERSION        "2.1.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -234,6 +234,7 @@ typedef struct {
     char menu_items[12][32];
     void (*menu_actions[12])(void);
     int  menu_item_count;
+    int  last_mx, last_my;
 } State;
 
 static State G;
@@ -629,8 +630,11 @@ static void draw_menu(void){
     box_bot(y+h-1,x,w);
     for(int i=0;i<G.menu_item_count;i++){
         at(y+1+i,x+1);
-        cfg(TH->fg_normal);
+        bool hover=(G.last_my==y+1+i && G.last_mx>x && G.last_mx<x+w-1);
+        if(hover){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}
+        else{cfg(TH->fg_normal);}
         printf(" %- *s ",w-4,G.menu_items[i]);
+        rst();
     }
 }
 
@@ -1425,9 +1429,10 @@ static void msel(int *sel,int *scr,int cnt,int d,int vis){
    MOUSE HANDLER
 ================================================================ */
 static void handle_mouse(MouseEvt m){
+    G.last_mx=m.col; G.last_my=m.row;
     bool su=(m.btn&64)&&!(m.btn&1);
     bool sd=(m.btn&64)&&(m.btn&1);
-    bool cl=!su&&!sd&&!m.release&&(m.btn&3)!=3;
+    bool cl=!su&&!sd&&!m.release&&(m.btn&3)!=3 && !(m.btn&32);
     bool right_cl=cl && (m.btn&3)==2;
     int ct=2;
 
@@ -1580,9 +1585,9 @@ static bool vi_pre(Key *k){
    MAIN KEY HANDLER
 ================================================================ */
 static void handle_key(Key k){
+    if(k.type==KEY_MOUSE){handle_mouse(k.mouse);return;}
     if(G.menu_active){G.menu_active=false;return;}
     if(G.in_prompt){handle_prompt_key(k);return;}
-    if(k.type==KEY_MOUSE){handle_mouse(k.mouse);return;}
     if(vi_pre(&k))return;
 
     int vis=G.rows-5;
