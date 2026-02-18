@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.7.0"
+#define VERSION        "2.7.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -412,7 +412,24 @@ static void draw_flush(void){
 static void ppad(const char *s,int w){
     if(w<=0)return;
     int vis=0;
-    while(*s&&vis<w){
+    int actual_len = 0;
+    const char *p = s;
+    while(*p){
+        if(*p=='\x1b'&&p[1]=='['){
+            p+=2; while(*p && *p != 'm') p++;
+            if(*p == 'm') p++; continue;
+        }
+        int len = 1;
+        if(((unsigned char)*p & 0xe0) == 0xc0) len = 2;
+        else if(((unsigned char)*p & 0xf0) == 0xe0) len = 3;
+        else if(((unsigned char)*p & 0xf8) == 0xf0) len = 4;
+        p += len; actual_len++;
+    }
+
+    bool truncated = (actual_len > w);
+    int limit = truncated ? (w > 1 ? w - 1 : w) : w;
+
+    while(*s&&vis<limit){
         if(*s=='\x1b'&&s[1]=='['){
             s+=2;
             while(*s && *s != 'm'){
@@ -438,6 +455,10 @@ static void ppad(const char *s,int w){
         char tmp[8] = {0};
         for(int i=0; i<len && *s; i++) tmp[i] = *s++;
         put_cell(G.cur_r, G.cur_c, tmp);
+        vis++;
+    }
+    if(truncated && w >= 1){
+        put_cell(G.cur_r, G.cur_c, "…");
         vis++;
     }
     while(vis<w){put_cell(G.cur_r, G.cur_c, " "); vis++;}
