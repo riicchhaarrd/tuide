@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.5.2"
+#define VERSION        "2.5.3"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -326,7 +326,7 @@ static void get_winsize(void){
     else{G.cols=ws.ws_col;G.rows=ws.ws_row;}
     buf_resize(&G.front, G.cols, G.rows);
     buf_resize(&G.back, G.cols, G.rows);
-    memset(G.front.cells, 0, G.front.w * G.front.h * sizeof(Cell));
+    if(G.front.cells) memset(G.front.cells, 0, G.front.w * G.front.h * sizeof(Cell));
 }
 
 static void put_cell(int r, int c, const char *s){
@@ -447,14 +447,14 @@ static void layout(void){
     if(G.lw_custom > 0) G.lw = iclamp(G.lw_custom, 20, G.cols-20);
     else G.lw=imax(26,imin(48,G.cols*32/100));
     
-    G.rx=G.lw+1; G.rw=G.cols-G.lw;
+    G.rx=G.lw; G.rw=G.cols-G.lw+1;
     int ch=G.rows-2;
     
     if(G.lh_chg_custom > 0) G.lh_chg = iclamp(G.lh_chg_custom, 4, ch-4);
     else G.lh_chg=imax(5,ch*58/100);
     
-    G.lh_gph=ch-G.lh_chg;
-    if(G.lh_gph<4){G.lh_gph=4;G.lh_chg=ch-4;}
+    G.lh_gph=ch-G.lh_chg+1;
+    if(G.lh_gph<4){G.lh_gph=4; G.lh_chg=ch-G.lh_gph+1;}
 }
 
 /* ================================================================
@@ -817,20 +817,25 @@ static void draw_dividers(void){
     if(G.current_view != VIEW_STATUS) return;
     int ct=2;
     /* Vertical divider */
-    for(int r=ct; r<G.rows-1; r++){
-        at(r, G.lw);
-        bool hover = (G.last_mx == G.lw && G.last_my == r);
-        if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, G.lw, "┃");}
-        else {cfg(TH->fg_dim); put_cell(r, G.lw, "│");}
-        rst();
+    if(G.lw >= 1 && G.lw <= G.cols){
+        for(int r=ct; r<G.rows-1; r++){
+            at(r, G.lw);
+            bool hover = (G.last_mx == G.lw && G.last_my == r);
+            if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, G.lw, "┃");}
+            else {cfg(TH->fg_dim); put_cell(r, G.lw, "│");}
+            rst();
+        }
     }
     /* Horizontal divider */
-    for(int c=1; c<G.lw; c++){
-        at(ct+G.lh_chg-1, c);
-        bool hover = (G.last_my == ct+G.lh_chg-1 && G.last_mx == c);
-        if(G.dragging_h || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(ct+G.lh_chg-1, c, "━");}
-        else {cfg(TH->fg_dim); put_cell(ct+G.lh_chg-1, c, "─");}
-        rst();
+    int hr = ct + G.lh_chg - 1;
+    if(hr >= 1 && hr < G.rows){
+        for(int c=1; c<G.lw; c++){
+            at(hr, c);
+            bool hover = (G.last_my == hr && G.last_mx == c);
+            if(G.dragging_h || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(hr, c, "━");}
+            else {cfg(TH->fg_dim); put_cell(hr, c, "─");}
+            rst();
+        }
     }
 }
 
@@ -1417,9 +1422,9 @@ static void draw_prompt_overlay(void){
    MASTER DRAW
 ================================================================ */
 static void draw(void){
+    layout();
     buf_clear(&G.back);
     rst();
-    layout();
     draw_tabbar();
 
     int ct=2, ch=G.rows-2;
