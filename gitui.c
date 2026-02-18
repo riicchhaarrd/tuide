@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.3.0"
+#define VERSION        "2.4.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -136,7 +136,7 @@ static const Theme *THEMES[] = {&TH_DARK, &TH_VSLIGHT, &TH_SOL};
 ================================================================ */
 typedef enum { VIEW_STATUS,VIEW_LOG,VIEW_BRANCHES,VIEW_STASH,VIEW_HELP,VIEW_COUNT } View;
 typedef enum { VIMODE_NORMAL,VIMODE_INSERT } ViMode;
-typedef enum { FOCUS_CHANGES,FOCUS_GRAPH,FOCUS_DIFF } FocusPane;
+typedef enum { FOCUS_CHANGES,FOCUS_GRAPH,FOCUS_DIFF,FOCUS_CLI } FocusPane;
 typedef enum {
     FS_UNTRACKED,FS_MODIFIED,FS_STAGED_MODIFY,FS_STAGED_NEW,
     FS_STAGED_DEL,FS_DELETED,FS_RENAMED,FS_CONFLICT,FS_COPIED
@@ -216,6 +216,10 @@ typedef struct {
     char prompt_label[128], prompt_buf[INPUT_MAX];
     int  prompt_cursor;
     void (*prompt_cb)(const char *);
+
+    /* CLI */
+    char cli_buf[INPUT_MAX];
+    int  cli_cursor;
 
     /* Status */
     char   status_msg[256];
@@ -648,6 +652,29 @@ static void draw_menu(void){
 /* ================================================================
    TAB BAR
 ================================================================ */
+static void draw_cli(void){
+    int row = G.rows - 1;
+    at(row, 1);
+    bool focused = (G.focus == FOCUS_CLI);
+    if(focused){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}
+    else{cbg(TH->bg_panel);cfg(TH->fg_dim);}
+    printf(" $ ");
+    if(focused){cfg(TH->fg_bright);}else{cfg(TH->fg_normal);}
+    printf("%.*s", G.cli_cursor, G.cli_buf);
+    if(focused){
+        cbg(TH->fg_accent1);cfg(TH->bg_base);
+        char c = G.cli_buf[G.cli_cursor];
+        putchar(c?c:' ');
+        rst();
+        if(focused)cbg(TH->bg_sel); else cbg(TH->bg_panel);
+        cfg(TH->fg_bright);
+    }
+    printf("%s", G.cli_buf + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0));
+    int used = 3 + (int)strlen(G.cli_buf);
+    for(int i=used; i<G.cols; i++) putchar(' ');
+    rst();
+}
+
 static void draw_dividers(void){
     if(G.current_view != VIEW_STATUS) return;
     int ct=2;
@@ -1208,6 +1235,7 @@ static void draw(void){
     default: break;
     }
     draw_statusbar();
+    draw_cli();
     draw_prompt_overlay();
     draw_dividers();
     draw_menu();
@@ -1528,6 +1556,10 @@ static void handle_mouse(MouseEvt m){
         else if(m.col>=51 && m.col<=60) G.current_view=VIEW_HELP;
         return;
     }
+    if(cl && m.row==G.rows-1){
+        G.focus=FOCUS_CLI;
+        return;
+    }
 
     if(G.current_view==VIEW_STATUS){
         layout();
@@ -1632,10 +1664,45 @@ static bool vi_pre(Key *k){
 /* ================================================================
    MAIN KEY HANDLER
 ================================================================ */
+static void handle_cli_key(Key k){
+    if(k.type==KEY_ESC){G.focus=FOCUS_CHANGES;return;}
+    if(k.type==KEY_ENTER){
+        if(G.cli_buf[0]){
+            OK("Executing: %s", G.cli_buf);
+            draw();
+            /* Special handling for 'cd' or similar if needed, but system() is fine for most */
+            int r = system(G.cli_buf);
+            if(r==0)OK("Success: %s", G.cli_buf);
+            else ERR("Failed (%d): %s", r, G.cli_buf);
+            G.cli_buf[0]='\0'; G.cli_cursor=0;
+            reload_all();
+        }
+        G.focus=FOCUS_CHANGES;
+        return;
+    }
+    if(k.type==KEY_BACKSPACE){
+        if(G.cli_cursor>0){
+            int len=(int)strlen(G.cli_buf);
+            memmove(&G.cli_buf[G.cli_cursor-1], &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
+            G.cli_cursor--;
+        }
+    } else if(k.type==KEY_LEFT){if(G.cli_cursor>0)G.cli_cursor--;}
+    else if(k.type==KEY_RIGHT){if(G.cli_cursor<(int)strlen(G.cli_buf))G.cli_cursor++;}
+    else if(k.type==KEY_CHAR){
+        int len=(int)strlen(G.cli_buf);
+        if(len+1<INPUT_MAX){
+            memmove(&G.cli_buf[G.cli_cursor+1], &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
+            G.cli_buf[G.cli_cursor++]=k.ch;
+        }
+    }
+}
+
 static void handle_key(Key k){
     if(k.type==KEY_MOUSE){handle_mouse(k.mouse);return;}
     if(G.menu_active){G.menu_active=false;return;}
     if(G.in_prompt){handle_prompt_key(k);return;}
+    if(G.focus==FOCUS_CLI){handle_cli_key(k);return;}
+    if(k.type==KEY_CHAR && k.ch==':'){G.focus=FOCUS_CLI; return;}
     if(vi_pre(&k))return;
 
     int vis=G.rows-5;
