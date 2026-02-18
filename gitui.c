@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.0.0"
+#define VERSION        "2.0.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1113,7 +1113,7 @@ static void draw_prompt_overlay(void){
    MASTER DRAW
 ================================================================ */
 static void draw(void){
-    printf(T_HIDE T_CLEAR);
+    printf(T_HIDE CSI "H");
     layout();
     draw_tabbar();
 
@@ -1712,7 +1712,7 @@ int main(int argc, char **argv){
 
     get_winsize();
     term_raw();
-    printf(T_ALT T_HIDE T_MOUSE_ON);
+    printf(T_ALT T_HIDE T_MOUSE_ON T_CLEAR);
     fflush(stdout);
 
     load_branch(); load_status(); load_log(); load_branches(); load_stash();
@@ -1721,7 +1721,7 @@ int main(int argc, char **argv){
     OK("gitui v%s — Tab:focus  T:theme  V:vi-mode  s:side-by-side  ?:help  q:quit", VERSION);
 
     while(G.running){
-        if(g_resize){g_resize=0;get_winsize();}
+        if(g_resize){g_resize=0;get_winsize();printf(T_CLEAR);}
         draw();
         Key k=read_key();
         if(k.type!=KEY_NONE)handle_key(k);
