@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.5.4"
+#define VERSION        "2.5.5"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -251,6 +251,7 @@ typedef struct {
     int lw, lh_chg, lh_gph, rx, rw;
     int lw_custom, lh_chg_custom;
     bool dragging_v, dragging_h;
+    int  tab_x[6];
 
     /* Context Menu */
     bool menu_active;
@@ -849,6 +850,7 @@ static void draw_tabbar(void){
     };
     int cur_c = 10;
     for(int i=0;i<5;i++){
+        G.tab_x[i] = cur_c;
         bool act=(tabs[i].v==G.current_view);
         at(1, cur_c);
         if(act){cbg(TH->bg_tab_act);cfg(TH->fg_bright);G.cur_bold=true;}
@@ -859,6 +861,7 @@ static void draw_tabbar(void){
         at(1, cur_c); cbg(TH->bg_tab_inact); cfg(TH->fg_dim); put_cell(1, cur_c, "│");
         cur_c++;
     }
+    G.tab_x[5] = cur_c;
     /* Vi indicator */
     if(G.vi_enabled){
         at(1, cur_c);
@@ -1761,11 +1764,11 @@ static void handle_mouse(MouseEvt m){
     }
 
     if(cl && m.row==1){
-        if(m.col>=10 && m.col<=20) G.current_view=VIEW_STATUS;
-        else if(m.col>=21 && m.col<=27) G.current_view=VIEW_LOG;
-        else if(m.col>=28 && m.col<=40) G.current_view=VIEW_BRANCHES;
-        else if(m.col>=41 && m.col<=50) G.current_view=VIEW_STASH;
-        else if(m.col>=51 && m.col<=60) G.current_view=VIEW_HELP;
+        if(m.col>=G.tab_x[0] && m.col<G.tab_x[1]) G.current_view=VIEW_STATUS;
+        else if(m.col>=G.tab_x[1] && m.col<G.tab_x[2]) G.current_view=VIEW_LOG;
+        else if(m.col>=G.tab_x[2] && m.col<G.tab_x[3]) G.current_view=VIEW_BRANCHES;
+        else if(m.col>=G.tab_x[3] && m.col<G.tab_x[4]) G.current_view=VIEW_STASH;
+        else if(m.col>=G.tab_x[4] && m.col<G.tab_x[5]) G.current_view=VIEW_HELP;
         return;
     }
     if(cl && m.row==G.rows-1){
