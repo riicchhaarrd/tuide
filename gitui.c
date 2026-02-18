@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.5.3"
+#define VERSION        "2.5.4"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -334,18 +334,14 @@ static void put_cell(int r, int c, const char *s){
     Cell *cell = &G.back.cells[(r-1)*G.cols + (c-1)];
     memset(cell->ch, 0, 8);
     if(s && *s){
-        /* If it's a UTF-8 character, we should ideally copy the full multi-byte sequence.
-           For simplicity in this TUI, we'll copy up to 7 bytes. */
-        int i=0; cell->ch[i++] = *s++;
-        if((unsigned char)cell->ch[0] >= 0xc0){
-            while(*s && ((unsigned char)*s & 0xc0) == 0x80 && i < 7) cell->ch[i++] = *s++;
-        }
+        int i=0; while(*s && i<7) cell->ch[i++] = *s++;
     } else {
         cell->ch[0] = ' ';
     }
     cell->fg = G.cur_fg; cell->bg = G.cur_bg;
     cell->bold = G.cur_bold; cell->dim = G.cur_dim; cell->italic = G.cur_italic;
     cell->under = G.cur_under; cell->rev = G.cur_rev;
+    G.cur_c = c + 1;
 }
 
 static void put_char(int r, int c, char ch){
@@ -385,6 +381,11 @@ static void draw_flush(void){
 
             if(attr_changed || fg_changed || bg_changed){
                 printf(CSI "0m");
+                /* After reset, all attributes are unknown/default */
+                last_fg.r = last_fg.g = last_fg.b = -1;
+                last_bg.r = last_bg.g = last_bg.b = -1;
+                last_bold = last_dim = last_italic = last_under = last_rev = false;
+
                 printf(CSI "38;2;%d;%d;%dm", b->fg.r, b->fg.g, b->fg.b);
                 printf(CSI "48;2;%d;%d;%dm", b->bg.r, b->bg.g, b->bg.b);
                 if(b->bold) printf(T_BOLD);
@@ -434,10 +435,10 @@ static void ppad(const char *s,int w){
         
         char tmp[8] = {0};
         for(int i=0; i<len && *s; i++) tmp[i] = *s++;
-        put_cell(G.cur_r, G.cur_c + vis, tmp);
+        put_cell(G.cur_r, G.cur_c, tmp);
         vis++;
     }
-    while(vis<w){put_cell(G.cur_r, G.cur_c + vis, " "); vis++;}
+    while(vis<w){put_cell(G.cur_r, G.cur_c, " "); vis++;}
 }
 
 /* ================================================================
@@ -1211,8 +1212,8 @@ static void draw_log(int top,int h){
         } else {
             ppad("", 21);
         }
-        cfg(sel?TH->fg_sel:TH->fg_accent2);ppad(c->author,14); ppad(" ", 1);
-        cfg(sel?TH->fg_sel:TH->fg_accent3);ppad(c->date, 13); ppad(" ", 1);
+        cfg(sel?TH->fg_sel:TH->fg_accent2); ppad(c->author,14); ppad(" ", 1);
+        cfg(sel?TH->fg_sel:TH->fg_accent3); ppad(c->date, 13); ppad(" ", 1);
         int used=GRAPH_COLS+10+21+14+15;
         int sw=w-3-used;
         if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
@@ -2166,7 +2167,7 @@ int main(int argc, char **argv){
 
     OK("gitui v%s — Tab:focus  T:theme  V:vi-mode  s:side-by-side  ?:help  q:quit", VERSION);
 
-    draw();
+    draw(); draw();
     while(G.running){
         Key k=read_key();
         if(k.type!=KEY_NONE){
