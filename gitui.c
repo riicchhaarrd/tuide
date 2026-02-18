@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.7.3"
+#define VERSION        "2.7.4"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -351,7 +351,10 @@ static void put_char(int r, int c, char ch){
     put_cell(r, c, s);
 }
 
-static void at(int r,int c){ G.cur_r = r; G.cur_c = c; }
+static void at(int r,int c){ 
+    G.cur_r = iclamp(r, 1, G.rows); 
+    G.cur_c = iclamp(c, 1, G.cols); 
+}
 static void cfg(Color c){ G.cur_fg = c; }
 static void cbg(Color c){ G.cur_bg = c; }
 static void rst(void){ 
@@ -1184,7 +1187,7 @@ static void draw_diff(int top,int rx,int rw,int h){
                 char lno[16]; if(od->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,od->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
                 ppad(lno, lnum_w+1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold=true; ppad(od->old_line,code_w);
             } else {
-                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) put_cell(row, rx+1+i, " ");
+                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) { at(row, rx+1+i); put_cell(row, rx+1+i, " "); }
             }
             rst();
             /* Right: new */
@@ -1192,9 +1195,9 @@ static void draw_diff(int top,int rx,int rw,int h){
             if(nd){
                 cbg(TH->bg_diff_add);cfg(TH->fg_linenum);
                 char lno[16]; if(nd->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,nd->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
-                ppad(lno, lnum_w+1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->fg_diff_add); G.cur_bold=true; ppad(nd->new_line,code_w);
+                ppad(lno, lnum_w+1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold=true; ppad(nd->new_line,code_w);
             } else {
-                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) put_cell(row, rx+half+1+i, " ");
+                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+2;i++) { at(row, rx+half+1+i); put_cell(row, rx+half+1+i, " "); }
             }
             rst(); row++;
         }
