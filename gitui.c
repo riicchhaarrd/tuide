@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.4.1"
+#define VERSION        "2.5.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -85,6 +85,18 @@ typedef struct {
     Color fg_ref_local, fg_ref_remote, fg_ref_tag;
     Color fg_ok, fg_err, fg_linenum;
 } Theme;
+
+/* Rendering Cell */
+typedef struct {
+    char ch[8];
+    Color fg, bg;
+    bool bold, dim, italic, under, rev;
+} Cell;
+
+typedef struct {
+    Cell *cells;
+    int w, h;
+} Buffer;
 
 /* Dark+ (VSCode Dark+) */
 static const Theme TH_DARK = {
@@ -178,6 +190,12 @@ typedef struct {
     int rows, cols;
     bool running;
     int  theme_idx;
+
+    /* Rendering */
+    Buffer front, back;
+    Color cur_fg, cur_bg;
+    bool cur_bold, cur_dim, cur_italic, cur_under, cur_rev;
+    int cur_r, cur_c;
 
     /* Vi */
     ViMode vi_mode;
@@ -291,16 +309,101 @@ static void term_raw(void){
     tcsetattr(STDIN_FILENO,TCSAFLUSH,&r);
 }
 static void term_restore(void){tcsetattr(STDIN_FILENO,TCSAFLUSH,&G.orig_termios);}
+static void buf_resize(Buffer *b, int w, int h){
+    if(b->w == w && b->h == h) return;
+    free(b->cells);
+    b->cells = calloc(w * h, sizeof(Cell));
+    b->w = w; b->h = h;
+}
+static void buf_clear(Buffer *b){
+    if(!b->cells) return;
+    memset(b->cells, 0, b->w * b->h * sizeof(Cell));
+}
+
 static void get_winsize(void){
     struct winsize ws;
     if(ioctl(STDOUT_FILENO,TIOCGWINSZ,&ws)==-1||!ws.ws_col){G.cols=80;G.rows=24;}
     else{G.cols=ws.ws_col;G.rows=ws.ws_row;}
+    buf_resize(&G.front, G.cols, G.rows);
+    buf_resize(&G.back, G.cols, G.rows);
+    memset(G.front.cells, 0, G.front.w * G.front.h * sizeof(Cell));
 }
 
-static void at(int r,int c){printf(CSI"%d;%dH",r,c);}
-static void cfg(Color c){fg(c.r,c.g,c.b);}
-static void cbg(Color c){bg(c.r,c.g,c.b);}
-static void rst(void){printf(T_RESET);}
+static void put_cell(int r, int c, const char *s){
+    if(r<1 || r>G.rows || c<1 || c>G.cols || !G.back.cells) return;
+    Cell *cell = &G.back.cells[(r-1)*G.cols + (c-1)];
+    memset(cell->ch, 0, 8);
+    if(s && *s){
+        /* If it's a UTF-8 character, we should ideally copy the full multi-byte sequence.
+           For simplicity in this TUI, we'll copy up to 7 bytes. */
+        int i=0; cell->ch[i++] = *s++;
+        if((unsigned char)cell->ch[0] >= 0xc0){
+            while(*s && ((unsigned char)*s & 0xc0) == 0x80 && i < 7) cell->ch[i++] = *s++;
+        }
+    } else {
+        cell->ch[0] = ' ';
+    }
+    cell->fg = G.cur_fg; cell->bg = G.cur_bg;
+    cell->bold = G.cur_bold; cell->dim = G.cur_dim; cell->italic = G.cur_italic;
+    cell->under = G.cur_under; cell->rev = G.cur_rev;
+}
+
+static void put_char(int r, int c, char ch){
+    char s[2] = {ch, 0};
+    put_cell(r, c, s);
+}
+
+static void at(int r,int c){ G.cur_r = r; G.cur_c = c; }
+static void cfg(Color c){ G.cur_fg = c; }
+static void cbg(Color c){ G.cur_bg = c; }
+static void rst(void){ 
+    G.cur_fg = TH->fg_normal; G.cur_bg = TH->bg_base; 
+    G.cur_bold=G.cur_dim=G.cur_italic=G.cur_under=G.cur_rev=false; 
+}
+
+static void draw_flush(void){
+    if(!G.back.cells || !G.front.cells) return;
+    Color last_fg = {-1,-1,-1}, last_bg = {-1,-1,-1};
+    bool last_bold=false, last_dim=false, last_italic=false, last_under=false, last_rev=false;
+    int tr=-1, tc=-1;
+
+    for(int r=1; r<=G.rows; r++){
+        for(int c=1; c<=G.cols; c++){
+            Cell *b = &G.back.cells[(r-1)*G.cols + (c-1)];
+            Cell *f = &G.front.cells[(r-1)*G.cols + (c-1)];
+            
+            if(memcmp(b, f, sizeof(Cell)) == 0) continue;
+            
+            if(tr != r || tc != c){
+                printf(CSI "%d;%dH", r, c);
+            }
+            
+            bool attr_changed = (b->bold != last_bold || b->dim != last_dim || 
+                                b->italic != last_italic || b->under != last_under || b->rev != last_rev);
+            bool fg_changed = (memcmp(&b->fg, &last_fg, sizeof(Color)) != 0);
+            bool bg_changed = (memcmp(&b->bg, &last_bg, sizeof(Color)) != 0);
+
+            if(attr_changed || fg_changed || bg_changed){
+                printf(CSI "0m");
+                printf(CSI "38;2;%d;%d;%dm", b->fg.r, b->fg.g, b->fg.b);
+                printf(CSI "48;2;%d;%d;%dm", b->bg.r, b->bg.g, b->bg.b);
+                if(b->bold) printf(T_BOLD);
+                if(b->dim) printf(T_DIM);
+                if(b->italic) printf(T_ITALIC);
+                if(b->under) printf(T_UNDER);
+                if(b->rev) printf(T_REVERSE);
+                last_fg = b->fg; last_bg = b->bg;
+                last_bold=b->bold; last_dim=b->dim; last_italic=b->italic;
+                last_under=b->under; last_rev=b->rev;
+            }
+            
+            if(b->ch[0]) fputs(b->ch, stdout); else putchar(' ');
+            *f = *b;
+            tr = r; tc = c+1;
+        }
+    }
+    fflush(stdout);
+}
 
 /* Print string padded/truncated to exactly w visible chars */
 static void ppad(const char *s,int w){
@@ -308,13 +411,33 @@ static void ppad(const char *s,int w){
     int vis=0;
     while(*s&&vis<w){
         if(*s=='\x1b'&&s[1]=='['){
-            /* pass ANSI escape through without counting */
-            while(*s&&*s!='m'){putchar(*s++);} if(*s){putchar(*s++);}
+            s+=2;
+            while(*s && *s != 'm'){
+                int val = atoi(s);
+                if(val == 0) rst();
+                else if(val == 1) G.cur_bold = true;
+                else if(val == 2) G.cur_dim = true;
+                else if(val == 3) G.cur_italic = true;
+                else if(val == 4) G.cur_under = true;
+                else if(val == 7) G.cur_rev = true;
+                else if(val == 22) {G.cur_bold = false; G.cur_dim = false;}
+                while(*s && isdigit(*s)) s++;
+                if(*s == ';') s++;
+            }
+            if(*s == 'm') s++;
             continue;
         }
-        putchar(*s++); vis++;
+        int len = 1;
+        if(((unsigned char)*s & 0xe0) == 0xc0) len = 2;
+        else if(((unsigned char)*s & 0xf0) == 0xe0) len = 3;
+        else if(((unsigned char)*s & 0xf8) == 0xf0) len = 4;
+        
+        char tmp[8] = {0};
+        for(int i=0; i<len && *s; i++) tmp[i] = *s++;
+        put_cell(G.cur_r, G.cur_c + vis, tmp);
+        vis++;
     }
-    while(vis<w){putchar(' ');vis++;}
+    while(vis<w){put_cell(G.cur_r, G.cur_c + vis, " "); vis++;}
 }
 
 /* ================================================================
@@ -580,35 +703,38 @@ static void reload_all(void){
 ================================================================ */
 static void box_top(int row,int col,int w,const char *title,bool active){
     at(row,col);
-    if(active){cfg(TH->fg_accent1);printf(T_BOLD);}else cfg(TH->fg_dim);
-    printf("┌");
+    if(active){G.cur_bold=true;cfg(TH->fg_accent1);}else cfg(TH->fg_dim);
+    put_cell(row,col,"┌");
     int tlen=(int)strlen(title)+2;
     int left=(w-2-tlen)/2; if(left<0)left=0;
-    for(int i=0;i<left;i++)printf("─");
-    rst();
-    if(active){cfg(TH->fg_bright);printf(T_BOLD);}else cfg(TH->fg_dim);
-    printf(" %s ",title);
-    if(active){rst();cfg(TH->fg_accent1);printf(T_BOLD);}else{rst();cfg(TH->fg_dim);}
+    for(int i=0;i<left;i++)put_cell(row,col+1+i,"─");
+    
+    if(active){G.cur_bold=true;cfg(TH->fg_bright);}else cfg(TH->fg_dim);
+    at(row, col+1+left);
+    ppad(title, tlen);
+    
+    if(active){G.cur_bold=true;cfg(TH->fg_accent1);}else{rst();cfg(TH->fg_dim);}
     int right=w-2-left-tlen;
-    for(int i=0;i<right;i++)printf("─");
-    printf("┐"); rst();
+    for(int i=0;i<right;i++)put_cell(row, col+1+left+tlen+i,"─");
+    put_cell(row, col+w-1, "┐");
+    rst();
 }
 static void box_bot(int row,int col,int w){
-    at(row,col); cfg(TH->fg_dim); printf("└");
-    for(int i=0;i<w-2;i++)printf("─");
-    printf("┘"); rst();
+    at(row,col); cfg(TH->fg_dim); put_cell(row,col,"└");
+    for(int i=0;i<w-2;i++)put_cell(row,col+1+i,"─");
+    put_cell(row,col+w-1,"┘"); rst();
 }
 static void box_sides(int top,int col,int w,int h){
     cfg(TH->fg_dim);
-    for(int r=top+1;r<top+h-1;r++){at(r,col);printf("│");at(r,col+w-1);printf("│");}
+    for(int r=top+1;r<top+h-1;r++){put_cell(r,col,"│");put_cell(r,col+w-1,"│");}
     rst();
 }
 static void box_fill(int top,int col,int w,int h,Color c){
+    cfg(TH->fg_normal); cbg(c);
     for(int r=top+1;r<top+h-1;r++){
-        at(r,col+1); cbg(c);
-        for(int i=0;i<w-2;i++)putchar(' ');
-        rst();
+        for(int i=0;i<w-2;i++)put_cell(r,col+1+i," ");
     }
+    rst();
 }
 
 /* ================================================================
@@ -642,9 +768,10 @@ static void draw_menu(void){
     for(int i=0;i<G.menu_item_count;i++){
         at(y+1+i,x+1);
         bool hover=(G.last_my==y+1+i && G.last_mx>x && G.last_mx<x+w-1);
-        if(hover){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}
+        if(hover){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}
         else{cfg(TH->fg_normal);}
-        printf(" %- *s ",w-4,G.menu_items[i]);
+        char mitem[64]; snprintf(mitem, sizeof(mitem), " %-*s ", w-4, G.menu_items[i]);
+        ppad(mitem, w-2);
         rst();
     }
 }
@@ -656,22 +783,33 @@ static void draw_cli(void){
     int row = G.rows - 1;
     at(row, 1);
     bool focused = (G.focus == FOCUS_CLI);
-    if(focused){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}
+    if(focused){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}
     else{cbg(TH->bg_panel);cfg(TH->fg_dim);}
-    printf(" $ ");
+    ppad(" $ ", 3);
     if(focused){cfg(TH->fg_bright);}else{cfg(TH->fg_normal);}
-    printf("%.*s", G.cli_cursor, G.cli_buf);
+    
+    char buf[INPUT_MAX+1];
+    int len = (int)strlen(G.cli_buf);
+    at(row, 4);
+    ppad(G.cli_buf, G.cli_cursor);
+    
     if(focused){
-        cbg(TH->fg_accent1);cfg(TH->bg_base);
+        at(row, 4 + G.cli_cursor);
+        cbg(TH->fg_accent1); cfg(TH->bg_base);
         char c = G.cli_buf[G.cli_cursor];
-        putchar(c?c:' ');
+        char cs[2] = {c?c:' ', 0};
+        put_cell(row, 4 + G.cli_cursor, cs);
         rst();
-        if(focused)cbg(TH->bg_sel); else cbg(TH->bg_panel);
+        if(focused) cbg(TH->bg_sel); else cbg(TH->bg_panel);
         cfg(TH->fg_bright);
     }
-    printf("%s", G.cli_buf + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0));
-    int used = 3 + (int)strlen(G.cli_buf);
-    for(int i=used; i<G.cols; i++) putchar(' ');
+    
+    at(row, 4 + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0));
+    ppad(G.cli_buf + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0), len - G.cli_cursor);
+    
+    int used = 3 + len;
+    at(row, 1 + used);
+    for(int i=used; i<G.cols; i++) put_cell(row, 1+i, " ");
     rst();
 }
 
@@ -682,45 +820,54 @@ static void draw_dividers(void){
     for(int r=ct; r<G.rows-1; r++){
         at(r, G.lw);
         bool hover = (G.last_mx == G.lw && G.last_my == r);
-        if(G.dragging_v || hover){cfg(TH->fg_accent1); printf(T_BOLD "┃"); rst();}
-        else {cfg(TH->fg_dim); printf("│"); rst();}
+        if(G.dragging_v || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(r, G.lw, "┃");}
+        else {cfg(TH->fg_dim); put_cell(r, G.lw, "│");}
+        rst();
     }
     /* Horizontal divider */
     for(int c=1; c<G.lw; c++){
         at(ct+G.lh_chg-1, c);
         bool hover = (G.last_my == ct+G.lh_chg-1 && G.last_mx == c);
-        if(G.dragging_h || hover){cfg(TH->fg_accent1); printf(T_BOLD "━"); rst();}
-        else {cfg(TH->fg_dim); printf("─"); rst();}
+        if(G.dragging_h || hover){cfg(TH->fg_accent1); G.cur_bold=true; put_cell(ct+G.lh_chg-1, c, "━");}
+        else {cfg(TH->fg_dim); put_cell(ct+G.lh_chg-1, c, "─");}
+        rst();
     }
 }
 
 static void draw_tabbar(void){
-    at(1,1); cbg(TH->bg_tab_inact); cfg(TH->fg_accent2); printf(T_BOLD);
-    printf(" ⎇ gitui "); rst();
+    at(1,1); cbg(TH->bg_tab_inact); cfg(TH->fg_accent2); G.cur_bold=true;
+    ppad(" ⎇ gitui ", 9); rst();
     static const struct{const char *n,*k;View v;}tabs[]={
         {"Changes","1",VIEW_STATUS},{"Log","2",VIEW_LOG},
         {"Branches","3",VIEW_BRANCHES},{"Stash","4",VIEW_STASH},{"Help","?",VIEW_HELP}
     };
+    int cur_c = 10;
     for(int i=0;i<5;i++){
         bool act=(tabs[i].v==G.current_view);
-        if(act){cbg(TH->bg_tab_act);cfg(TH->fg_bright);printf(T_BOLD);}
+        at(1, cur_c);
+        if(act){cbg(TH->bg_tab_act);cfg(TH->fg_bright);G.cur_bold=true;}
         else{cbg(TH->bg_tab_inact);cfg(TH->fg_dim);}
-        printf(" %s[%s] ",tabs[i].n,tabs[i].k); rst();
-        cbg(TH->bg_tab_inact); cfg(TH->fg_dim); printf("│");
+        char tbuf[32]; snprintf(tbuf,sizeof(tbuf)," %s[%s] ",tabs[i].n,tabs[i].k);
+        ppad(tbuf, (int)strlen(tbuf)); rst();
+        cur_c += (int)strlen(tbuf);
+        at(1, cur_c); cbg(TH->bg_tab_inact); cfg(TH->fg_dim); put_cell(1, cur_c, "│");
+        cur_c++;
     }
     /* Vi indicator */
     if(G.vi_enabled){
-        if(G.vi_mode==VIMODE_NORMAL){cbg(TH->bg_tab_inact);cfg(TH->fg_staged);printf(T_BOLD);printf(" NORMAL ");}
-        else{cbg(TH->bg_tab_inact);cfg(TH->fg_unstaged);printf(T_BOLD);printf(" INSERT ");}
+        at(1, cur_c);
+        if(G.vi_mode==VIMODE_NORMAL){cbg(TH->bg_tab_inact);cfg(TH->fg_staged);G.cur_bold=true;ppad(" NORMAL ", 8);}
+        else{cbg(TH->bg_tab_inact);cfg(TH->fg_unstaged);G.cur_bold=true;ppad(" INSERT ", 8);}
+        cur_c += 8;
     }
     /* Theme & branch - right aligned */
     cbg(TH->bg_tab_inact); cfg(TH->fg_accent3);
     char rbuf[160]; int rlen=snprintf(rbuf,sizeof(rbuf)," ◈ %s  ⎇ %s ",TH->name,G.branch_name);
-    int cur_col=9+5*11+( G.vi_enabled?8:0 ); /* approximate */
-    int pad=G.cols-cur_col-rlen; if(pad<0)pad=0;
-    for(int i=0;i<pad;i++)putchar(' ');
-    cfg(TH->fg_accent3); printf("◈ %s  ",TH->name);
-    cfg(TH->fg_ref_local); printf(T_BOLD); printf("⎇ %s ",G.branch_name);
+    int pad=G.cols-cur_c-rlen; if(pad<0)pad=0;
+    for(int i=0;i<pad;i++)put_cell(1, cur_c+i, " ");
+    at(1, G.cols-rlen+1);
+    cfg(TH->fg_accent3); ppad("◈ ", 2); ppad(TH->name, (int)strlen(TH->name)); ppad("  ", 2);
+    cfg(TH->fg_ref_local); G.cur_bold=true; ppad("⎇ ", 2); ppad(G.branch_name, (int)strlen(G.branch_name));
     rst();
 }
 
@@ -738,17 +885,25 @@ static void draw_statusbar(void){
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
     else if(G.current_view==VIEW_HELP) hint="q:close help";
-    cfg(TH->fg_dim); printf(" %s",hint);
+    
+    cfg(TH->fg_dim);
+    ppad(" ", 1);
+    ppad(hint, G.cols-2);
+    
     if(G.vi_enabled&&G.vi_count>0){
-        at(G.rows,G.cols-12); cfg(TH->fg_accent1); printf(T_BOLD); printf("[%d]",G.vi_count);
+        at(G.rows,G.cols-12); cfg(TH->fg_accent1); G.cur_bold=true;
+        char vbuf[16]; snprintf(vbuf,sizeof(vbuf),"[%d]",G.vi_count);
+        ppad(vbuf, (int)strlen(vbuf));
     }
     if(G.status_msg[0]&&(time(NULL)-G.status_msg_time)<5){
         int mlen=(int)strlen(G.status_msg)+2;
         at(G.rows,G.cols-mlen);
         if(G.status_is_err)cfg(TH->fg_err); else cfg(TH->fg_ok);
-        printf(T_BOLD); printf(" %s ",G.status_msg);
+        G.cur_bold=true;
+        char sbuf[258]; snprintf(sbuf,sizeof(sbuf)," %s ",G.status_msg);
+        ppad(sbuf, mlen);
     }
-    rst(); printf(CSI"K");
+    rst();
 }
 
 /* ================================================================
@@ -768,7 +923,7 @@ static void draw_changes(int top,int h){
 
     /* ── Staged section ── */
     if(row<lim){
-        at(row,2); cbg(TH->bg_header); cfg(TH->fg_staged); printf(T_BOLD);
+        at(row,2); cbg(TH->bg_header); cfg(TH->fg_staged); G.cur_bold=true;
         char hdr[64]; snprintf(hdr,sizeof(hdr)," ✓ Staged (%d) ",staged_n);
         ppad(hdr,iw); rst(); row++;
     }
@@ -776,7 +931,7 @@ static void draw_changes(int top,int h){
         if(!G.files[i].staged)continue;
         bool sel=(G.file_sel==i&&act);
         at(row,2);
-        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}else cbg(TH->bg_panel);
         cfg(sel?TH->fg_sel:TH->fg_staged);
         const char *ic=" M";
         switch(G.files[i].st){
@@ -784,7 +939,7 @@ static void draw_changes(int top,int h){
             case FS_RENAMED:ic=" R";break;    case FS_COPIED:ic=" C";break;
             default:ic=" M";break;
         }
-        printf("%s ",ic);
+        ppad(ic, 2); ppad(" ", 1);
         if(sel){cfg(TH->fg_sel);cbg(TH->bg_sel);}else{cfg(TH->fg_normal);cbg(TH->bg_panel);}
         char disp[512];
         if(G.files[i].orig[0])snprintf(disp,sizeof(disp),"%s→%s",G.files[i].orig,G.files[i].path);
@@ -792,11 +947,11 @@ static void draw_changes(int top,int h){
         ppad(disp,iw-3); rst(); row++;
     }
     /* spacer */
-    if(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)putchar(' ');rst();row++;}
+    if(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
 
     /* ── Unstaged section ── */
     if(row<lim){
-        at(row,2); cbg(TH->bg_header); cfg(TH->fg_unstaged); printf(T_BOLD);
+        at(row,2); cbg(TH->bg_header); cfg(TH->fg_unstaged); G.cur_bold=true;
         char hdr[64]; snprintf(hdr,sizeof(hdr)," ✗ Unstaged (%d) ",unstaged_n);
         ppad(hdr,iw); rst(); row++;
     }
@@ -804,7 +959,7 @@ static void draw_changes(int top,int h){
         if(G.files[i].staged)continue;
         bool sel=(G.file_sel==i&&act);
         at(row,2);
-        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}else cbg(TH->bg_panel);
         Color ic_col=TH->fg_unstaged;
         const char *ic=" M";
         switch(G.files[i].st){
@@ -813,12 +968,12 @@ static void draw_changes(int top,int h){
             case FS_CONFLICT:ic=" !";ic_col=TH->fg_conflict;break;
             default:ic=" M";break;
         }
-        cfg(sel?TH->fg_sel:ic_col); printf("%s ",ic);
+        cfg(sel?TH->fg_sel:ic_col); ppad(ic, 2); ppad(" ", 1);
         if(sel){cfg(TH->fg_sel);cbg(TH->bg_sel);}else{cfg(TH->fg_normal);cbg(TH->bg_panel);}
         ppad(G.files[i].path,iw-3); rst(); row++;
     }
     /* fill */
-    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)putchar(' ');rst();row++;}
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
     box_bot(top+h-1,1,w);
 }
 
@@ -842,42 +997,45 @@ static void draw_graph(int top,int h){
         GitCommit *c=&G.commits[i];
         bool sel=(G.commit_sel==i);
         at(row,2);
-        if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+        if(sel){cbg(TH->bg_sel); G.cur_bold=true;}else cbg(TH->bg_base);
 
         /* Graph chars */
         char *gp=c->graph; int gc=0;
         while(*gp&&gc<GRAPH_COLS){
             int ci_=(c->graph_col/2)%6;
+            at(row, 2+gc);
             if(*gp=='*'){
-                cfg(TH->fg_graph[ci_]); printf(T_BOLD); putchar(244); /* ● approximation */
-                rst(); if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
-            } else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);putchar('|');}
-            else if(*gp=='/'){cfg(TH->fg_graph[1]);putchar('/');}
-            else if(*gp=='\\'){cfg(TH->fg_graph[2]);putchar('\\');}
-            else if(*gp=='-'){cfg(TH->fg_graph[2]);putchar('-');}
-            else putchar(*gp);
-            rst(); if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+                cfg(TH->fg_graph[ci_]); G.cur_bold=true; put_cell(row, 2+gc, "●");
+                rst(); if(sel){cbg(TH->bg_sel);G.cur_bold=true;}else cbg(TH->bg_base);
+            } else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);put_cell(row, 2+gc, "|");}
+            else if(*gp=='/'){cfg(TH->fg_graph[1]);put_cell(row, 2+gc, "/");}
+            else if(*gp=='\\'){cfg(TH->fg_graph[2]);put_cell(row, 2+gc, "\\");}
+            else if(*gp=='-'){cfg(TH->fg_graph[2]);put_cell(row, 2+gc, "-");}
+            else { char tmp[2]={*gp,0}; put_cell(row, 2+gc, tmp); }
+            rst(); if(sel){cbg(TH->bg_sel);G.cur_bold=true;}else cbg(TH->bg_base);
             gp++; gc++;
         }
-        while(gc<GRAPH_COLS){putchar(' ');gc++;}
+        while(gc<GRAPH_COLS){at(row, 2+gc); put_cell(row, 2+gc, " "); gc++;}
 
-        cfg(sel?TH->fg_sel:TH->fg_accent1); printf(T_BOLD);
-        printf("%.8s ",c->hash); rst();
+        at(row, 2+GRAPH_COLS);
+        cfg(sel?TH->fg_sel:TH->fg_accent1); G.cur_bold=true;
+        char hbuf[16]; snprintf(hbuf,sizeof(hbuf),"%.8s ",c->hash);
+        ppad(hbuf, 9); rst();
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_base);
 
         int used=GRAPH_COLS+9;
         if(c->refs[0]&&iw>used+8){
             cfg(sel?TH->fg_sel:TH->fg_ref_local);
-            char rf[20]; snprintf(rf,sizeof(rf),"(%.14s)",c->refs);
-            printf("%s ",rf); used+=(int)strlen(rf)+1;
+            char rf[32]; snprintf(rf,sizeof(rf),"(%.14s) ",c->refs);
+            ppad(rf, (int)strlen(rf));
+            used+=(int)strlen(rf);
             if(sel){cfg(TH->fg_sel);cbg(TH->bg_sel);}else{rst();cbg(TH->bg_base);}
         }
-        int sw=iw-used-1;
+        int sw=iw-used;
         if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
-        rst(); row++;
-        row--; /* loop will increment */
+        rst();
     }
-    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<iw;i++)putchar(' ');rst();row++;}
+    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
     box_bot(top+h-1,1,w);
 }
 
@@ -902,7 +1060,7 @@ static void draw_diff(int top,int rx,int rw,int h){
 
     if(!G.diff_count){
         at(row+vis/2,rx+rw/2-12);
-        cfg(TH->fg_dim); printf("(no diff — select a file or commit)"); rst(); return;
+        cfg(TH->fg_dim); ppad("(no diff — select a file or commit)", 35); rst(); return;
     }
 
     bool ssb=G.diff_sidebyside;
@@ -915,9 +1073,9 @@ static void draw_diff(int top,int rx,int rw,int h){
     if(ssb){
         /* Center divider */
         cfg(TH->fg_dim);
-        for(int r=row+1;r<lim;r++){at(r,rx+half);printf("│");}
+        for(int r=row+1;r<lim;r++){at(r,rx+half);put_cell(r, rx+half, "│");}
         /* Header */
-        at(row,rx+1); cbg(TH->bg_header); cfg(TH->fg_accent3); printf(T_BOLD);
+        at(row,rx+1); cbg(TH->bg_header); cfg(TH->fg_accent3); G.cur_bold=true;
         ppad(" ◀ OLD",half-1);
         at(row,rx+half+1); ppad(" NEW ▶ ",half-1);
         rst(); row++; lim--; vis--;
@@ -930,12 +1088,13 @@ static void draw_diff(int top,int rx,int rw,int h){
         for(;di<G.diff_count&&row<lim;di++,row++){
             DiffLine *dl=&G.diff_lines[di];
             at(row,rx+1);
+            char lno[16];
             switch(dl->type){
-            case 0: cbg(TH->bg_base);cfg(TH->fg_linenum);printf("%*d ",lnum_w,dl->old_lno);cfg(TH->fg_diff_ctx);ppad(dl->old_line,code_w);break;
-            case 1: cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)printf("%*d ",lnum_w,dl->new_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_add);printf(T_BOLD);printf("+");ppad(dl->new_line,code_w-1);break;
-            case 2: cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)printf("%*d ",lnum_w,dl->old_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_del);printf(T_BOLD);printf("-");ppad(dl->old_line,code_w-1);break;
-            case 3: cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);printf(T_BOLD);ppad(dl->new_line,code_w+lnum_w+2);break;
-            case 4: cbg(TH->bg_header);cfg(TH->fg_accent2);printf(T_BOLD);ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
+            case 0: cbg(TH->bg_base);cfg(TH->fg_linenum);snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);ppad(lno,lnum_w+1);cfg(TH->fg_diff_ctx);ppad(dl->old_line,code_w);break;
+            case 1: cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);cfg(TH->fg_diff_add);G.cur_bold=true;ppad("+",1);ppad(dl->new_line,code_w-1);break;
+            case 2: cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);cfg(TH->fg_diff_del);G.cur_bold=true;ppad("-",1);ppad(dl->old_line,code_w-1);break;
+            case 3: cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);G.cur_bold=true;ppad(dl->new_line,code_w+lnum_w+2);break;
+            case 4: cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
             }
             rst();
         }
@@ -947,15 +1106,17 @@ static void draw_diff(int top,int rx,int rw,int h){
                 at(row,rx+1);
                 if(dl->type==3){cbg(TH->bg_diff_hdr);cfg(TH->fg_diff_hdr);}
                 else{cbg(TH->bg_header);cfg(TH->fg_accent2);}
-                printf(T_BOLD);
+                G.cur_bold=true;
                 ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);
                 rst(); di++; row++; continue;
             }
             if(dl->type==0){
                 at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
-                printf("%*d ",lnum_w,dl->old_lno); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w);
+                char lno[16]; snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad(lno, lnum_w+1);
+                cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w);
                 at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
-                printf("%*d ",lnum_w,dl->new_lno); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
+                snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno); ppad(lno, lnum_w+1);
+                cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
                 rst(); di++; row++; continue;
             }
             DiffLine *od=NULL,*nd=NULL;
@@ -963,18 +1124,28 @@ static void draw_diff(int top,int rx,int rw,int h){
             else if(dl->type==1){nd=dl;di++;}
             /* Left: old */
             at(row,rx+1);
-            if(od){cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(od->old_lno>0)printf("%*d ",lnum_w,od->old_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_del);printf(T_BOLD);ppad(od->old_line,code_w);}
-            else{cbg(TH->bg_base);for(int i=0;i<code_w+lnum_w+1;i++)putchar(' ');}
+            if(od){
+                cbg(TH->bg_diff_del);cfg(TH->fg_linenum);
+                char lno[16]; if(od->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,od->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
+                ppad(lno, lnum_w+1); cfg(TH->fg_diff_del); G.cur_bold=true; ppad(od->old_line,code_w);
+            } else {
+                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+1;i++) put_cell(row, rx+1+i, " ");
+            }
             rst();
             /* Right: new */
             at(row,rx+half+1);
-            if(nd){cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(nd->new_lno>0)printf("%*d ",lnum_w,nd->new_lno);else printf("%*s ",lnum_w,"");cfg(TH->fg_diff_add);printf(T_BOLD);ppad(nd->new_line,code_w);}
-            else{cbg(TH->bg_base);for(int i=0;i<code_w+lnum_w+1;i++)putchar(' ');}
+            if(nd){
+                cbg(TH->bg_diff_add);cfg(TH->fg_linenum);
+                char lno[16]; if(nd->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,nd->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");
+                ppad(lno, lnum_w+1); cfg(TH->fg_diff_add); G.cur_bold=true; ppad(nd->new_line,code_w);
+            } else {
+                cbg(TH->bg_base); for(int i=0;i<code_w+lnum_w+1;i++) put_cell(row, rx+half+1+i, " ");
+            }
             rst(); row++;
         }
     }
     /* Fill */
-    while(row<lim){at(row,rx+1);cbg(TH->bg_base);for(int i=0;i<rw-2;i++)putchar(' ');rst();row++;}
+    while(row<lim){at(row,rx+1);cbg(TH->bg_base);for(int i=0;i<rw-2;i++)put_cell(row,rx+1+i," ");rst();row++;}
     /* Scrollbar */
     if(G.diff_count>vis&&vis>2){
         int bh=imax(1,(vis*vis)/G.diff_count);
@@ -982,7 +1153,7 @@ static void draw_diff(int top,int rx,int rw,int h){
         for(int r=0;r<vis;r++){
             at(top+1+r,rx+rw-1);
             cfg(r>=bpos&&r<bpos+bh?TH->fg_accent2:TH->fg_dim);
-            printf(r>=bpos&&r<bpos+bh?"█":"│");
+            put_cell(top+1+r, rx+rw-1, r>=bpos&&r<bpos+bh?"█":"│");
         }
         rst();
     }
@@ -1212,7 +1383,8 @@ static void draw_prompt_overlay(void){
    MASTER DRAW
 ================================================================ */
 static void draw(void){
-    printf(T_HIDE CSI "H");
+    buf_clear(&G.back);
+    rst();
     layout();
     draw_tabbar();
 
@@ -1239,8 +1411,8 @@ static void draw(void){
     draw_prompt_overlay();
     draw_dividers();
     draw_menu();
-    printf(T_SHOW);
-    fflush(stdout);
+    
+    draw_flush();
 }
 
 /* ================================================================
@@ -1945,6 +2117,11 @@ int main(int argc, char **argv){
     printf(T_ALT T_HIDE T_MOUSE_ON T_CLEAR);
     fflush(stdout);
 
+    /* Rendering init */
+    buf_resize(&G.front, G.cols, G.rows);
+    buf_resize(&G.back, G.cols, G.rows);
+    memset(G.front.cells, 0, G.front.w * G.front.h * sizeof(Cell));
+
     load_branch(); load_status(); load_log(); load_branches(); load_stash();
     update_diff();
 
@@ -1964,6 +2141,7 @@ int main(int argc, char **argv){
 
     printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
     term_restore();
+    free(G.front.cells); free(G.back.cells);
     printf("gitui — bye!\n");
     return 0;
 }
