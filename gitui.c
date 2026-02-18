@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.10.0"
+#define VERSION        "2.10.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -658,6 +658,16 @@ static void parse_diff(const char *raw){
         DiffLine *dl=&G.diff_lines[G.diff_count]; memset(dl,0,sizeof(*dl));
         char lb[LINE_MAX_LEN]; if(len>=LINE_MAX_LEN)len=LINE_MAX_LEN-1;
         memcpy(lb,line,len); lb[len]='\0';
+        
+        /* Skip git metadata headers for a cleaner view */
+        if(strncmp(lb, "diff --git", 10) == 0 || strncmp(lb, "index ", 6) == 0 ||
+           strncmp(lb, "new file mode", 13) == 0 || strncmp(lb, "deleted file mode", 17) == 0 ||
+           strncmp(lb, "rename from", 11) == 0 || strncmp(lb, "rename to", 9) == 0 ||
+           strncmp(lb, "similarity index", 16) == 0 ||
+           strncmp(lb, "--- ", 4) == 0 || strncmp(lb, "+++ ", 4) == 0){
+            line=nl?nl+1:line+len; continue;
+        }
+
         if(lb[0]=='+'&&lb[1]=='+'&&lb[2]=='+'){
             dl->type=4; snprintf(dl->new_line,sizeof(dl->new_line),"%s",lb);
         } else if(lb[0]=='-'&&lb[1]=='-'&&lb[2]=='-'){
@@ -1225,12 +1235,14 @@ static void draw_diff(int top,int rx,int rw,int h){
                 cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);
                 cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del);G.cur_bold=true;ppad(dl->old_line,code_w-1);break;
             case 3: /* Hunk header */
+                if(!G.diff_is_summary && G.diff_commit[0] && G.graph_file_sel > 0) { row--; continue; }
                 cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);G.cur_bold=true;
                 char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                 if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                 snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
                 ppad(hsub, code_w+lnum_w+2); break;
             case 4: /* File header */
+                if(!G.diff_is_summary && G.diff_commit[0] && G.graph_file_sel > 0) { row--; continue; }
                 if(strstr(dl->new_line, "+++") || strstr(dl->old_line, "---")) { row--; continue; } /* Skip these */
                 cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
             case 5: /* Commit summary file list item */ {
@@ -1248,6 +1260,7 @@ static void draw_diff(int top,int rx,int rw,int h){
         while(di<G.diff_count&&row<lim){
             DiffLine *dl=&G.diff_lines[di];
             if(dl->type==3||dl->type==4){
+                if(!G.diff_is_summary && G.diff_commit[0] && G.graph_file_sel > 0) { di++; continue; }
                 if(dl->type==4 && (strstr(dl->new_line, "+++") || strstr(dl->old_line, "---"))) { di++; continue; }
                 at(row,rx+1);
                 if(dl->type==3){
