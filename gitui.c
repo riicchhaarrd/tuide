@@ -1393,10 +1393,15 @@ static void draw_diff(int top,int rx,int rw,int h){
 
         for(int r=0;r<vis;r++){
             bool thumb = (r>=bpos&&r<bpos+bh);
+            bool hover = (G.last_mx >= rx+rw-3 && G.last_mx <= rx+rw-1 && G.last_my == top+1+r);
+            bool active = (G.dragging_sc && thumb);
             for (int sw=0; sw<3; sw++) {
                 at(top+1+r,rx+rw-1-sw);
                 if (thumb) {
-                    cfg(TH->fg_accent2); put_cell(top+1+r, rx+rw-1-sw, "█");
+                    if (G.dragging_sc) cfg(TH->fg_sel);
+                    else if (G.last_mx >= rx+rw-3) cfg(TH->fg_accent1);
+                    else cfg(TH->fg_accent2);
+                    put_cell(top+1+r, rx+rw-1-sw, "█");
                 } else {
                     if (markers[r] == 1) { cfg(TH->fg_staged); put_cell(top+1+r, rx+rw-1-sw, "▒"); }
                     else if (markers[r] == 2) { cfg(TH->fg_unstaged); put_cell(top+1+r, rx+rw-1-sw, "▒"); }
@@ -2009,7 +2014,7 @@ static void handle_mouse(MouseEvt m){
         if(cl && m.col==G.lw){G.dragging_v=true; return;}
         if(cl && m.col<G.lw && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
         if(cl && G.diff_sidebyside && m.col==G.rx+G.diff_split){G.dragging_diff=true; return;}
-        if(cl && m.col==G.cols && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
+        if(cl && m.col >= G.cols-2 && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
             G.dragging_sc = true;
             int rel_y = m.row - G.sc_y;
             int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
@@ -2107,6 +2112,17 @@ static void handle_mouse(MouseEvt m){
         int lh=(G.rows-2)*55/100;
         bool in_log=(m.row<ct+lh);
         int vis=lh-2;
+        if(cl && m.col >= G.cols-2 && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
+            G.dragging_sc = true;
+            int rel_y = m.row - G.sc_y;
+            int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
+            int max_bpos = G.sc_h - bh;
+            if(max_bpos > 0){
+                int bpos = iclamp(rel_y - bh/2, 0, max_bpos);
+                G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+            }
+            return;
+        }
         if(in_log){
             if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis);
             if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis);
