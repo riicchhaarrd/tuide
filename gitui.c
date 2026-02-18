@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.8.0"
+#define VERSION        "2.9.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -159,6 +159,9 @@ typedef struct {
     char hash[16],author[64],email[64],date[32],subject[256],refs[192];
     char graph[24];
     int  graph_col;
+    bool expanded;
+    char files[16][128];
+    int  f_count;
 } GitCommit;
 typedef struct { char name[128],upstream[128]; bool is_remote,is_current; int ahead,behind; } GitBranch;
 typedef struct { char message[256],hash[16]; int index; } GitStash;
@@ -964,6 +967,27 @@ static void draw_statusbar(void){
     rst();
 }
 
+static void fetch_commit_files(int idx){
+    if(idx<0 || idx>=G.commit_count) return;
+    GitCommit *c = &G.commits[idx];
+    if(c->f_count > 0) return;
+    char cmd[256]; snprintf(cmd, sizeof(cmd), "git show --name-only --format='' %s 2>/dev/null | head -n 16", c->hash);
+    char *o = git_run(cmd); if(!o) return;
+    char *line = o;
+    while(*line && c->f_count < 16){
+        char *nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl-line) : strlen(line);
+        if(len > 0){
+            if(len >= 128) len = 127;
+            memcpy(c->files[c->f_count], line, len);
+            c->files[c->f_count][len] = '\0';
+            c->f_count++;
+        }
+        line = nl ? nl + 1 : line + len;
+    }
+    free(o);
+}
+
 /* ================================================================
    CHANGES PANE
 ================================================================ */
@@ -1060,31 +1084,36 @@ static void draw_graph(int top,int h){
         at(row,2);
         if(sel){cbg(TH->bg_sel); G.cur_bold=true;}else cbg(TH->bg_base);
 
+        /* Expansion indicator */
+        cfg(sel?TH->fg_sel:TH->fg_dim);
+        ppad(c->expanded ? "▾ " : "▸ ", 2);
+
         /* Graph chars */
         char *gp=c->graph; int gc=0;
+        int gx = 4;
         while(*gp&&gc<GRAPH_COLS){
             int ci_=(c->graph_col/2)%6;
-            at(row, 2+gc);
+            at(row, gx+gc);
             if(*gp=='*'){
-                cfg(TH->fg_graph[ci_]); G.cur_bold=true; put_cell(row, 2+gc, "●");
+                cfg(TH->fg_graph[ci_]); G.cur_bold=true; put_cell(row, gx+gc, "●");
                 rst(); if(sel){cbg(TH->bg_sel);G.cur_bold=true;}else cbg(TH->bg_base);
-            } else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);put_cell(row, 2+gc, "|");}
-            else if(*gp=='/'){cfg(TH->fg_graph[1]);put_cell(row, 2+gc, "/");}
-            else if(*gp=='\\'){cfg(TH->fg_graph[2]);put_cell(row, 2+gc, "\\");}
-            else if(*gp=='-'){cfg(TH->fg_graph[2]);put_cell(row, 2+gc, "-");}
-            else { char tmp[2]={*gp,0}; put_cell(row, 2+gc, tmp); }
+            } else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);put_cell(row, gx+gc, "|");}
+            else if(*gp=='/'){cfg(TH->fg_graph[1]);put_cell(row, gx+gc, "/");}
+            else if(*gp=='\\'){cfg(TH->fg_graph[2]);put_cell(row, gx+gc, "\\");}
+            else if(*gp=='-'){cfg(TH->fg_graph[2]);put_cell(row, gx+gc, "-");}
+            else { char tmp[2]={*gp,0}; put_cell(row, gx+gc, tmp); }
             rst(); if(sel){cbg(TH->bg_sel);G.cur_bold=true;}else cbg(TH->bg_base);
             gp++; gc++;
         }
-        while(gc<GRAPH_COLS){at(row, 2+gc); put_cell(row, 2+gc, " "); gc++;}
+        while(gc<GRAPH_COLS){at(row, gx+gc); put_cell(row, gx+gc, " "); gc++;}
 
-        at(row, 2+GRAPH_COLS);
+        at(row, gx+GRAPH_COLS);
         cfg(sel?TH->fg_sel:TH->fg_accent1); G.cur_bold=true;
         char hbuf[16]; snprintf(hbuf,sizeof(hbuf),"%.8s ",c->hash);
         ppad(hbuf, 9); rst();
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_base);
 
-        int used=GRAPH_COLS+9;
+        int used=GRAPH_COLS+9+2;
         if(c->refs[0]&&iw>used+8){
             cfg(sel?TH->fg_sel:TH->fg_ref_local);
             char rf[32]; snprintf(rf,sizeof(rf),"(%.14s) ",c->refs);
@@ -1095,6 +1124,17 @@ static void draw_graph(int top,int h){
         int sw=iw-used;
         if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
         rst();
+
+        if(c->expanded && row+1 < lim){
+            for(int fi=0; fi<c->f_count && row+1 < lim; fi++){
+                row++;
+                at(row, 2); cbg(TH->bg_base); cfg(TH->fg_dim);
+                ppad("  │ ", 4);
+                cfg(TH->fg_accent2);
+                ppad(c->files[fi], iw-6);
+                rst();
+            }
+        }
     }
     while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<iw;i++)put_cell(row,2+i," ");rst();row++;}
     box_bot(top+h-1,1,w);
@@ -1882,9 +1922,14 @@ static void handle_mouse(MouseEvt m){
                 int row=m.row-(ct+G.lh_chg+1);
                 int t = (cl) ? (G.commit_scroll+row) : G.commit_sel;
                 if(t>=0&&t<G.commit_count){
-                    if(cl) G.commit_sel=t;
-                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[G.commit_sel].hash,G.commits[G.commit_sel].subject);
-                    load_diff_commit(G.commits[G.commit_sel].hash);
+                    if(cl && m.col >= 2 && m.col <= 4) {
+                        G.commits[t].expanded = !G.commits[t].expanded;
+                        if(G.commits[t].expanded) fetch_commit_files(t);
+                    } else {
+                        if(cl) G.commit_sel=t;
+                        snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[G.commit_sel].hash,G.commits[G.commit_sel].subject);
+                        load_commit_summary(G.commits[G.commit_sel].hash);
+                    }
                 }
             }
         } else if(in_r){
@@ -2099,7 +2144,13 @@ static void handle_key(Key k){
                 else if(k.ch=='a')action_stage_all();
                 else if(k.ch=='u')action_unstage_all();
                 else if(k.ch=='d')action_discard();
-                else if(k.ch=='='||k.ch=='>')G.focus=FOCUS_DIFF;
+                else if(k.ch=='='||k.ch=='>'){
+                    if(G.commit_count>0){
+                        GitCommit *c=&G.commits[G.commit_sel];
+                        c->expanded = !c->expanded;
+                        if(c->expanded) fetch_commit_files(G.commit_sel);
+                    }
+                }
                 else if(k.ch=='s')action_stash();
                 break;
             default:break;
