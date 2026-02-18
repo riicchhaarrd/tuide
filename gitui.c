@@ -11,7 +11,6 @@
  *  └───────────────┴─────────────────────┴──────────────────────┘
  *
  *  Themes: T cycles Dark+ / VS-Light-Blue / Solarized-Dark
- *  Vi mode: normal/insert with full motion set
  *  Mouse:   click to focus panes, scroll wheel, click to select
  *
  *  Build:  cc -std=c99 -O2 -o gitui gitui.c
@@ -147,7 +146,6 @@ static const Theme *THEMES[] = {&TH_DARK, &TH_VSLIGHT, &TH_SOL};
    ENUMS & STRUCTS
 ================================================================ */
 typedef enum { VIEW_STATUS,VIEW_LOG,VIEW_BRANCHES,VIEW_STASH,VIEW_HELP,VIEW_COUNT } View;
-typedef enum { VIMODE_NORMAL,VIMODE_INSERT } ViMode;
 typedef enum { FOCUS_CHANGES,FOCUS_GRAPH,FOCUS_DIFF,FOCUS_CLI } FocusPane;
 typedef enum {
     FS_UNTRACKED,FS_MODIFIED,FS_STAGED_MODIFY,FS_STAGED_NEW,
@@ -180,6 +178,7 @@ typedef enum {
     KEY_CTRL_A,KEY_CTRL_B,KEY_CTRL_C,KEY_CTRL_D,KEY_CTRL_E,
     KEY_CTRL_F,KEY_CTRL_K,KEY_CTRL_N,KEY_CTRL_P,
     KEY_CTRL_U,KEY_CTRL_W,KEY_CTRL_Y,
+    KEY_CTRL_R,KEY_CTRL_S,KEY_CTRL_L,KEY_CTRL_Q,
     KEY_MOUSE,KEY_CHAR,
     KEY_F1,KEY_F2,KEY_F3,KEY_F4,KEY_F5
 } KeyType;
@@ -199,12 +198,6 @@ typedef struct {
     Color cur_fg, cur_bg;
     bool cur_bold, cur_dim, cur_italic, cur_under, cur_rev;
     int cur_r, cur_c;
-
-    /* Vi */
-    ViMode vi_mode;
-    bool   vi_enabled;
-    int    vi_count;
-    bool   vi_gg_pending;
 
     /* View / focus */
     View      current_view;
@@ -954,13 +947,6 @@ static void draw_tabbar(void){
         cur_c++;
     }
     G.tab_x[5] = cur_c;
-    /* Vi indicator */
-    if(G.vi_enabled){
-        at(1, cur_c);
-        if(G.vi_mode==VIMODE_NORMAL){cbg(TH->bg_tab_inact);cfg(TH->fg_staged);G.cur_bold=true;ppad(" NORMAL ", 8);}
-        else{cbg(TH->bg_tab_inact);cfg(TH->fg_unstaged);G.cur_bold=true;ppad(" INSERT ", 8);}
-        cur_c += 8;
-    }
     /* Theme & branch - right aligned */
     cbg(TH->bg_tab_inact); cfg(TH->fg_accent3);
     char rbuf[160]; int rlen=snprintf(rbuf,sizeof(rbuf)," ◈ %s  ⎇ %s ",TH->name,G.branch_name);
@@ -979,10 +965,10 @@ static void draw_statusbar(void){
     at(G.rows,1); cbg(TH->bg_panel);
     const char *hint="";
     if(G.current_view==VIEW_STATUS){
-        if(G.focus==FOCUS_CHANGES) hint="SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme  V:vi";
-        else if(G.focus==FOCUS_GRAPH) hint="j/k:move  ↵:diff  g/G:top/bot  T:theme";
-        else hint="j/k:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
-    } else if(G.current_view==VIEW_LOG) hint="j/k:move  ↵:diff  n:branch  s:side-by-side  T:theme";
+        if(G.focus==FOCUS_CHANGES) hint="SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme";
+        else if(G.focus==FOCUS_GRAPH) hint="↑/↓:move  ↵:diff  Home/End:top/bot  T:theme";
+        else hint="↑/↓:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
+    } else if(G.current_view==VIEW_LOG) hint="↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
     else if(G.current_view==VIEW_HELP) hint="q:close help";
@@ -991,11 +977,6 @@ static void draw_statusbar(void){
     ppad(" ", 1);
     ppad(hint, G.cols-2);
     
-    if(G.vi_enabled&&G.vi_count>0){
-        at(G.rows,G.cols-12); cfg(TH->fg_accent1); G.cur_bold=true;
-        char vbuf[16]; snprintf(vbuf,sizeof(vbuf),"[%d]",G.vi_count);
-        ppad(vbuf, (int)strlen(vbuf));
-    }
     if(G.status_msg[0]&&(time(NULL)-G.status_msg_time)<5){
         int mlen=(int)strlen(G.status_msg)+2;
         at(G.rows,G.cols-mlen);
@@ -1553,26 +1534,24 @@ static void draw_help(int top,int h){
         {"NAVIGATION",""},
         {"  Tab / Shift+Tab","Cycle views / focus panes"},
         {"  1-4 / ?","Jump: Changes, Log, Branches, Stash, Help"},
-        {"  j/k  ↑/↓","Move selection"},
-        {"  h/l  ←/→","Switch focus pane"},
-        {"  g/G","Top / bottom (or gg in Vi mode)"},
-        {"  Ctrl+D/U","Half-page down/up"},
+        {"  ↑/↓","Move selection"},
+        {"  ←/→","Switch focus pane"},
+        {"  Home / End","Top / bottom"},
         {"  PgUp/PgDn","Page scroll"},
         {"",""},
         {"CHANGES PANE",""},
-        {"  Space","Stage / unstage selected file"},
+        {"  Space / Ctrl+S","Stage / unstage selected file"},
         {"  a / u","Stage all / Unstage all"},
         {"  d","Discard changes (careful!)"},
         {"  Enter / =","View diff for file, switch to diff pane"},
         {"",""},
         {"DIFF PANE",""},
         {"  s","Toggle side-by-side / unified"},
-        {"  j/k  ↑/↓","Scroll diff vertically"},
+        {"  ↑/↓","Scroll diff vertically"},
         {"  [ / ]","Horizontal scroll"},
-        {"  g/G","Top / bottom of diff"},
         {"",""},
         {"GRAPH PANE (in Changes view)",""},
-        {"  j/k","Move through commits"},
+        {"  ↑/↓","Move through commits"},
         {"  Enter","Show commit diff in diff pane"},
         {"",""},
         {"BRANCHES",""},
@@ -1586,23 +1565,15 @@ static void draw_help(int top,int h){
         {"  D","Drop stash"},
         {"",""},
         {"GLOBAL",""},
-        {"  c","Commit staged changes"},
+        {"  c / Ctrl+C","Commit staged changes"},
         {"  A","Amend last commit"},
-        {"  P","Push to remote"},
-        {"  f","Fetch + pull"},
+        {"  P / Ctrl+P","Push to remote"},
+        {"  f / Ctrl+F","Fetch + pull"},
         {"  s","Stash working changes"},
-        {"  R","Full refresh"},
+        {"  R / Ctrl+R / Ctrl+L","Full refresh"},
         {"  T","Cycle theme: Dark+ → VS-Light → Solarized"},
-        {"  V","Toggle Vi modal keybindings"},
         {"  ?","Toggle this help"},
-        {"  q / Esc","Go back / quit"},
-        {"",""},
-        {"VI MODE  (toggle with V)",""},
-        {"  i","Enter insert/action mode"},
-        {"  Esc","Return to normal mode"},
-        {"  3j / 5k","Numeric prefix (repeat count)"},
-        {"  gg / G","Top / bottom"},
-        {"  Ctrl+F/B","Page down/up"},
+        {"  q / Esc / Ctrl+Q","Go back / quit"},
         {"",""},
         {"MOUSE",""},
         {"  Click","Focus pane, select item"},
@@ -1766,8 +1737,12 @@ static Key read_key(void){
     case 5:k.type=KEY_CTRL_E;return k;
     case 6:k.type=KEY_CTRL_F;return k;
     case 11:k.type=KEY_CTRL_K;return k;
+    case 12:k.type=KEY_CTRL_L;return k;
     case 14:k.type=KEY_CTRL_N;return k;
     case 16:k.type=KEY_CTRL_P;return k;
+    case 17:k.type=KEY_CTRL_Q;return k;
+    case 18:k.type=KEY_CTRL_R;return k;
+    case 19:k.type=KEY_CTRL_S;return k;
     case 21:k.type=KEY_CTRL_U;return k;
     case 23:k.type=KEY_CTRL_W;return k;
     case 25:k.type=KEY_CTRL_Y;return k;
@@ -1932,11 +1907,9 @@ static void action_drop_stash(void){
    SELECTION HELPER (Vi-count aware)
 ================================================================ */
 static void msel(int *sel,int *scr,int cnt,int d,int vis){
-    int n=G.vi_count>0?G.vi_count:1;
-    *sel=iclamp(*sel+d*n,0,cnt>0?cnt-1:0);
+    *sel=iclamp(*sel+d,0,cnt>0?cnt-1:0);
     if(*sel<*scr)*scr=*sel;
     if(*sel>=*scr+vis)*scr=*sel-vis+1;
-    G.vi_count=0;
 }
 
 /* ================================================================
@@ -2151,36 +2124,6 @@ static void handle_mouse(MouseEvt m){
 }
 
 /* ================================================================
-   VI MODE PREPROCESSOR
-================================================================ */
-static bool vi_pre(Key *k){
-    if(!G.vi_enabled)return false;
-    if(G.vi_mode==VIMODE_INSERT){
-        if(k->type==KEY_ESC){G.vi_mode=VIMODE_NORMAL;return true;}
-        return false;
-    }
-    /* Normal mode */
-    if(k->type==KEY_CHAR){
-        if(k->ch>='1'&&k->ch<='9'&&!G.vi_count){G.vi_count=k->ch-'0';return true;}
-        if(k->ch>='0'&&k->ch<='9'&&G.vi_count){G.vi_count=G.vi_count*10+(k->ch-'0');return true;}
-        if(k->ch=='i'||k->ch=='a'){G.vi_mode=VIMODE_INSERT;return true;}
-        if(k->ch=='j'){k->type=KEY_DOWN;return false;}
-        if(k->ch=='k'){k->type=KEY_UP;return false;}
-        if(k->ch=='G'){k->type=KEY_END;return false;}
-        if(k->ch=='g'){
-            if(G.vi_gg_pending){k->type=KEY_HOME;G.vi_gg_pending=false;return false;}
-            G.vi_gg_pending=true;return true;
-        }
-        G.vi_gg_pending=false;
-    }
-    if(k->type==KEY_CTRL_F){k->type=KEY_PGDN;return false;}
-    if(k->type==KEY_CTRL_B){k->type=KEY_PGUP;return false;}
-    if(k->type==KEY_CTRL_D){k->type=KEY_PGDN;G.vi_count=imax(1,G.vi_count/2)+1;return false;}
-    if(k->type==KEY_CTRL_U){k->type=KEY_PGUP;G.vi_count=imax(1,G.vi_count/2)+1;return false;}
-    return false;
-}
-
-/* ================================================================
    MAIN KEY HANDLER
 ================================================================ */
 static void handle_cli_key(Key k){
@@ -2241,7 +2184,6 @@ static void handle_key(Key k){
     if(G.in_prompt){handle_prompt_key(k);return;}
     if(G.focus==FOCUS_CLI){handle_cli_key(k);return;}
     if(k.type==KEY_CHAR && k.ch==':'){G.focus=FOCUS_CLI; return;}
-    if(vi_pre(&k))return;
 
     int vis=G.rows-5;
 
@@ -2263,8 +2205,6 @@ static void handle_key(Key k){
         case 'P':action_push();return;
         case 'f':action_pull();return;
         case 'T':G.theme_idx=(G.theme_idx+1)%NTHEMES;OK("Theme: %s",TH->name);return;
-        case 'V':G.vi_enabled=!G.vi_enabled;G.vi_mode=VIMODE_NORMAL;G.vi_count=0;
-                 OK("Vi mode: %s",G.vi_enabled?"ON":"OFF");return;
         case 'H':G.diff_continuous=!G.diff_continuous;
                  if (G.current_view == VIEW_STATUS && G.focus == FOCUS_CHANGES) update_diff();
                  else if (G.current_view == VIEW_STATUS && G.focus == FOCUS_GRAPH) {
@@ -2287,10 +2227,16 @@ static void handle_key(Key k){
                  return;
         }
     }
+    if(k.type==KEY_CTRL_C) { action_commit(); return; }
+    if(k.type==KEY_CTRL_R || k.type==KEY_CTRL_L) { reload_all(); return; }
+    if(k.type==KEY_CTRL_P) { action_push(); return; }
+    if(k.type==KEY_CTRL_F) { action_pull(); return; }
+    if(k.type==KEY_CTRL_S) { if(G.current_view==VIEW_STATUS && G.focus==FOCUS_CHANGES) action_stage(); return; }
+    if(k.type==KEY_CTRL_Q) { G.running=false; return; }
     if(k.type==KEY_ESC){
         if(G.current_view==VIEW_HELP){G.current_view=VIEW_STATUS;return;}
         if(G.focus==FOCUS_DIFF){G.focus=FOCUS_CHANGES;return;}
-        G.vi_count=0;G.vi_gg_pending=false;return;
+        return;
     }
     if(k.type==KEY_TAB){
         if(G.current_view==VIEW_STATUS)G.focus=(FocusPane)((G.focus+1)%3);
@@ -2306,12 +2252,12 @@ static void handle_key(Key k){
     switch(G.current_view){
     /* ──── STATUS ──── */
     case VIEW_STATUS:{
-        if(k.type==KEY_LEFT||(k.type==KEY_CHAR&&k.ch=='h')){
+        if(k.type==KEY_LEFT){
             if(G.focus==FOCUS_DIFF)G.focus=FOCUS_GRAPH;
             else if(G.focus==FOCUS_GRAPH)G.focus=FOCUS_CHANGES;
             return;
         }
-        if(k.type==KEY_RIGHT||(k.type==KEY_CHAR&&k.ch=='l')){
+        if(k.type==KEY_RIGHT){
             if(G.focus==FOCUS_CHANGES)G.focus=FOCUS_GRAPH;
             else if(G.focus==FOCUS_GRAPH)G.focus=FOCUS_DIFF;
             return;
@@ -2476,8 +2422,6 @@ static void handle_key(Key k){
                 else if(k.ch==']') { G.diff_split_custom = G.diff_split + 4; layout(); }
                 else if(k.ch=='<') { G.diff_split_custom = G.diff_split - 1; layout(); }
                 else if(k.ch=='>') { G.diff_split_custom = G.diff_split + 1; layout(); }
-                else if(k.ch=='h')G.diff_hscroll=imax(0,G.diff_hscroll-4);
-                else if(k.ch=='l')G.diff_hscroll+=4;
                 else if(k.ch=='q' && !G.diff_is_summary && G.diff_commit[0]) {
                     load_commit_summary(G.diff_commit);
                 }
@@ -2671,7 +2615,7 @@ int main(int argc, char **argv){
 
     memset(&G,0,sizeof(G));
     G.running=true; G.current_view=VIEW_STATUS; G.focus=FOCUS_CHANGES;
-    G.theme_idx=0; G.vi_enabled=false; G.vi_mode=VIMODE_NORMAL;
+    G.theme_idx=0;
     G.diff_sidebyside=true; G.diff_continuous=false;
 
     signal(SIGWINCH,sig_winch);
