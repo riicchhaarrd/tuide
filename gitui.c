@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.7.2"
+#define VERSION        "2.7.3"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1844,13 +1844,13 @@ static void handle_mouse(MouseEvt m){
             int vis=G.lh_gph-2;
             if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis);
             if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis);
-            if(cl){
+            if(cl || su || sd){
                 int row=m.row-(ct+G.lh_chg+1);
-                int t=G.commit_scroll+row;
+                int t = (cl) ? (G.commit_scroll+row) : G.commit_sel;
                 if(t>=0&&t<G.commit_count){
-                    G.commit_sel=t;
-                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[t].hash,G.commits[t].subject);
-                    load_diff_commit(G.commits[t].hash);
+                    if(cl) G.commit_sel=t;
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[G.commit_sel].hash,G.commits[G.commit_sel].subject);
+                    load_diff_commit(G.commits[G.commit_sel].hash);
                 }
             }
         } else if(in_r){
@@ -1865,7 +1865,14 @@ static void handle_mouse(MouseEvt m){
         if(in_log){
             if(su)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis);
             if(sd)msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis);
-            if(cl){int t=G.commit_scroll+(m.row-ct-1);if(t>=0&&t<G.commit_count){G.commit_sel=t;snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[t].hash,G.commits[t].subject);load_diff_commit(G.commits[t].hash);}}
+            if(cl || su || sd){
+                int t = (cl) ? (G.commit_scroll+(m.row-ct-1)) : G.commit_sel;
+                if(t>=0&&t<G.commit_count){
+                    if(cl) G.commit_sel=t;
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[G.commit_sel].hash,G.commits[G.commit_sel].subject);
+                    load_diff_commit(G.commits[G.commit_sel].hash);
+                }
+            }
         } else {
             if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
             if(sd)G.diff_scroll+=3;
