@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.2.0"
+#define VERSION        "2.2.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1462,10 +1462,10 @@ static void handle_mouse(MouseEvt m){
 
     if(cl && m.row==1){
         if(m.col>=10 && m.col<=20) G.current_view=VIEW_STATUS;
-        else if(m.col>=21 && m.col<=31) G.current_view=VIEW_LOG;
-        else if(m.col>=32 && m.col<=42) G.current_view=VIEW_BRANCHES;
-        else if(m.col>=43 && m.col<=53) G.current_view=VIEW_STASH;
-        else if(m.col>=54 && m.col<=64) G.current_view=VIEW_HELP;
+        else if(m.col>=21 && m.col<=27) G.current_view=VIEW_LOG;
+        else if(m.col>=28 && m.col<=40) G.current_view=VIEW_BRANCHES;
+        else if(m.col>=41 && m.col<=50) G.current_view=VIEW_STASH;
+        else if(m.col>=51 && m.col<=60) G.current_view=VIEW_HELP;
         return;
     }
 
@@ -1481,15 +1481,15 @@ static void handle_mouse(MouseEvt m){
             if(su)G.file_sel=imax(0,G.file_sel-1);
             if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+1);
             if(cl){
-                /* Simple row→file mapping: count visible rows in changes pane */
-                int row=m.row-(ct+2); /* skip box top + staged header */
-                int vis=0; int staged_shown=0,unstaged_shown=0;
+                int row=m.row-(ct+1);
+                int vis=0; /* row 0 is Staged header */
                 for(int i=0;i<G.file_count;i++){
-                    if(G.files[i].staged){if(!staged_shown){staged_shown=1;vis++;}if(vis-1==row){G.file_sel=i;break;}vis++;}
+                    if(G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
                 }
                 vis++; /* spacer */
+                vis++; /* Unstaged header */
                 for(int i=0;i<G.file_count;i++){
-                    if(!G.files[i].staged){if(!unstaged_shown){unstaged_shown=1;vis++;}if(vis-1==row){G.file_sel=i;break;}vis++;}
+                    if(!G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
                 }
             }
             update_diff();
