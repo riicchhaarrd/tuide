@@ -68,9 +68,6 @@
 #define T_UNDER      CSI "4m"
 #define T_REVERSE    CSI "7m"
 
-static void fg(int r, int g_, int b) { printf(CSI "38;2;%d;%d;%dm", r, g_, b); }
-static void bg(int r, int g_, int b) { printf(CSI "48;2;%d;%d;%dm", r, g_, b); }
-
 /* ================================================================
    THEME SYSTEM
 ================================================================ */
@@ -232,7 +229,7 @@ typedef struct {
     /* Diff */
     DiffLine diff_lines[MAX_DIFF_LINES];
     int diff_count, diff_scroll, diff_hscroll;
-    char diff_title[512], diff_commit[16];
+    char diff_title[512], diff_commit[64];
     bool diff_staged, diff_sidebyside, diff_is_summary, diff_continuous;
     int  diff_sel;
     int  diff_split, diff_split_custom;
@@ -382,11 +379,6 @@ static void put_cell(int r, int c, const char *s){
     cell->under = G.cur_under; cell->rev = G.cur_rev;
 }
 
-static void put_char(int r, int c, char ch){
-    char s[2] = {ch, 0};
-    put_cell(r, c, s);
-}
-
 static void at(int r,int c){ 
     G.cur_r = iclamp(r, 1, G.rows); 
     G.cur_c = iclamp(c, 1, G.cols); 
@@ -457,7 +449,8 @@ static void ppad(const char *s,int w){
     while(*p){
         if(*p=='\x1b'&&p[1]=='['){
             p+=2; while(*p && *p != 'm') p++;
-            if(*p == 'm') p++; continue;
+            if(*p == 'm') p++;
+            continue;
         }
         int len = 1;
         if(((unsigned char)*p & 0xe0) == 0xc0) len = 2;
@@ -750,10 +743,11 @@ static void parse_diff(const char *raw){
     G.diff_scroll=0; G.diff_hscroll=0;
 }
 static void load_commit_summary(const char *hash){
-    char cmd[256]; snprintf(cmd,sizeof(cmd),"git show --name-only --format='%%s%%n%%b' %s 2>/dev/null",hash);
+    char h[64]; snprintf(h, sizeof(h), "%s", hash);
+    char cmd[256]; snprintf(cmd,sizeof(cmd),"git show --name-only --format='%%s%%n%%b' %s 2>/dev/null", h);
     char *o=git_run(cmd); if(!o)return;
     G.diff_count=0; G.diff_scroll=0; G.diff_sel=0; G.diff_is_summary=true;
-    snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", hash);
+    snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", h);
     
     char *line=o;
     bool in_files=false;
@@ -893,7 +887,8 @@ static void draw_menu(void){
     int x=G.menu_x, y=G.menu_y, w=G.menu_w, h=G.menu_h;
     if(x+w>G.cols)x=G.cols-w;
     if(y+h>G.rows)y=G.rows-h;
-    if(x<1)x=1; if(y<1)y=1;
+    if(x<1)x=1;
+    if(y<1)y=1;
     G.menu_x=x; G.menu_y=y;
 
     box_top(y,x,w,"Menu",true,NULL);
@@ -923,7 +918,6 @@ static void draw_cli(void){
     ppad(" $ ", 3);
     if(focused){cfg(TH->fg_bright);}else{cfg(TH->fg_normal);}
     
-    char buf[INPUT_MAX+1];
     int len = (int)strlen(G.cli_buf);
     at(row, 4);
     ppad(G.cli_buf, G.cli_cursor);
@@ -1486,8 +1480,6 @@ static void draw_diff(int top,int rx,int rw,int h){
 
         for(int r=0;r<vis;r++){
             bool thumb = (r>=bpos&&r<bpos+bh);
-            bool hover = (G.last_mx >= rx+rw-3 && G.last_mx <= rx+rw-1 && G.last_my == top+1+r);
-            bool active = (G.dragging_sc && thumb);
             for (int sw=0; sw<3; sw++) {
                 at(top+1+r,rx+rw-1-sw);
                 if (thumb) {
@@ -2607,7 +2599,6 @@ static void editor_backspace(void){
 
 static void editor_newline(void){
     char *line = G.editor.lines[G.editor.cur_y];
-    int len = (int)strlen(line);
     char *next = strdup(line + G.editor.cur_x);
     line[G.editor.cur_x] = '\0';
     if(G.editor.line_count >= G.editor.line_cap){
@@ -3006,22 +2997,28 @@ static void handle_key(Key k){
             switch(k.type){
             case KEY_UP:   
                 if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-1);
-                else G.diff_scroll=imax(0,G.diff_scroll-1); break;
+                else G.diff_scroll=imax(0,G.diff_scroll-1);
+                break;
             case KEY_DOWN: 
                 if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+1);
-                else G.diff_scroll++; break;
+                else G.diff_scroll++;
+                break;
             case KEY_PGUP: 
                 if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-dv);
-                else G.diff_scroll=imax(0,G.diff_scroll-dv); break;
+                else G.diff_scroll=imax(0,G.diff_scroll-dv);
+                break;
             case KEY_PGDN: 
                 if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+dv);
-                else G.diff_scroll+=dv; break;
+                else G.diff_scroll+=dv;
+                break;
             case KEY_HOME: 
                 if(G.diff_is_summary) G.diff_sel = 0;
-                else G.diff_scroll=0; break;
+                else G.diff_scroll=0;
+                break;
             case KEY_END:  
                 if(G.diff_is_summary) G.diff_sel = G.diff_count-1;
-                else G.diff_scroll=G.diff_count; break;
+                else G.diff_scroll=G.diff_count;
+                break;
             case KEY_CTRL_C:
                 if(G.selecting) action_copy_selection();
                 break;
@@ -3146,16 +3143,20 @@ static void handle_key(Key k){
             switch(k.type){
             case KEY_UP:   
                 if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-1);
-                else G.diff_scroll=imax(0,G.diff_scroll-1); break;
+                else G.diff_scroll=imax(0,G.diff_scroll-1);
+                break;
             case KEY_DOWN: 
                 if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+1);
-                else G.diff_scroll++; break;
+                else G.diff_scroll++;
+                break;
             case KEY_PGUP: 
                 if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-dv);
-                else G.diff_scroll=imax(0,G.diff_scroll-dv); break;
+                else G.diff_scroll=imax(0,G.diff_scroll-dv);
+                break;
             case KEY_PGDN: 
                 if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+dv);
-                else G.diff_scroll+=dv; break;
+                else G.diff_scroll+=dv;
+                break;
             case KEY_ENTER:
                 if(G.diff_is_summary && G.diff_count > 0){
                     DiffLine *dl = &G.diff_lines[G.diff_sel];
