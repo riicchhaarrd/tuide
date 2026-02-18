@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.4.0"
+#define VERSION        "2.4.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -1665,12 +1665,12 @@ static bool vi_pre(Key *k){
    MAIN KEY HANDLER
 ================================================================ */
 static void handle_cli_key(Key k){
+    int len=(int)strlen(G.cli_buf);
     if(k.type==KEY_ESC){G.focus=FOCUS_CHANGES;return;}
     if(k.type==KEY_ENTER){
         if(G.cli_buf[0]){
             OK("Executing: %s", G.cli_buf);
             draw();
-            /* Special handling for 'cd' or similar if needed, but system() is fine for most */
             int r = system(G.cli_buf);
             if(r==0)OK("Success: %s", G.cli_buf);
             else ERR("Failed (%d): %s", r, G.cli_buf);
@@ -1682,14 +1682,31 @@ static void handle_cli_key(Key k){
     }
     if(k.type==KEY_BACKSPACE){
         if(G.cli_cursor>0){
-            int len=(int)strlen(G.cli_buf);
             memmove(&G.cli_buf[G.cli_cursor-1], &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
             G.cli_cursor--;
         }
+    } else if(k.type==KEY_DEL){
+        if(G.cli_cursor<len){
+            memmove(&G.cli_buf[G.cli_cursor], &G.cli_buf[G.cli_cursor+1], len-G.cli_cursor);
+        }
     } else if(k.type==KEY_LEFT){if(G.cli_cursor>0)G.cli_cursor--;}
-    else if(k.type==KEY_RIGHT){if(G.cli_cursor<(int)strlen(G.cli_buf))G.cli_cursor++;}
-    else if(k.type==KEY_CHAR){
-        int len=(int)strlen(G.cli_buf);
+    else if(k.type==KEY_RIGHT){if(G.cli_cursor<len)G.cli_cursor++;}
+    else if(k.type==KEY_HOME || k.type==KEY_CTRL_A){G.cli_cursor=0;}
+    else if(k.type==KEY_END || k.type==KEY_CTRL_E){G.cli_cursor=len;}
+    else if(k.type==KEY_CTRL_U){
+        memmove(G.cli_buf, &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
+        G.cli_cursor=0;
+    } else if(k.type==KEY_CTRL_K){
+        G.cli_buf[G.cli_cursor]='\0';
+    } else if(k.type==KEY_CTRL_W){
+        if(G.cli_cursor>0){
+            int pos=G.cli_cursor-1;
+            while(pos>0 && G.cli_buf[pos-1]==' ')pos--;
+            while(pos>0 && G.cli_buf[pos-1]!=' ')pos--;
+            memmove(&G.cli_buf[pos], &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
+            G.cli_cursor=pos;
+        }
+    } else if(k.type==KEY_CHAR){
         if(len+1<INPUT_MAX){
             memmove(&G.cli_buf[G.cli_cursor+1], &G.cli_buf[G.cli_cursor], len-G.cli_cursor+1);
             G.cli_buf[G.cli_cursor++]=k.ch;
