@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.9.2"
+#define VERSION        "2.10.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -974,7 +974,9 @@ static void fetch_commit_files(int idx){
     if(idx<0 || idx>=G.commit_count) return;
     GitCommit *c = &G.commits[idx];
     if(c->f_count > 0) return;
-    char cmd[256]; snprintf(cmd, sizeof(cmd), "git show --name-only --format='' %s 2>/dev/null | head -n 16", c->hash);
+    snprintf(c->files[0], 128, "[View Full Diff]");
+    c->f_count = 1;
+    char cmd[256]; snprintf(cmd, sizeof(cmd), "git show --name-only --format='' %s 2>/dev/null | head -n 15", c->hash);
     char *o = git_run(cmd); if(!o) return;
     char *line = o;
     while(*line && c->f_count < 16){
@@ -1957,13 +1959,18 @@ static void handle_mouse(MouseEvt m){
                     } else {
                         /* Clicked on a file under a commit */
                         G.graph_file_sel = fi;
-                        char *fpath = G.commits[ci].files[fi];
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.commits[ci].hash, fpath);
-                        char *o = git_run(cmd);
-                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.commits[ci].hash, fpath);
-                        G.diff_is_summary = false;
-                        snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", G.commits[ci].hash);
-                        parse_diff(o?o:""); free(o);
+                        if(fi == 0) {
+                            snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
+                            G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
+                        } else {
+                            char *fpath = G.commits[ci].files[fi];
+                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.commits[ci].hash, fpath);
+                            char *o = git_run(cmd);
+                            snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.commits[ci].hash, fpath);
+                            G.diff_is_summary = false;
+                            snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", G.commits[ci].hash);
+                            parse_diff(o?o:""); free(o);
+                        }
                     }
                 }
             }
@@ -2226,6 +2233,9 @@ static void handle_key(Key k){
                     if(G.graph_file_sel == -1) {
                         snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                         G.diff_staged=false; load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                    } else if(G.graph_file_sel == 0) {
+                        snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                        G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
                     } else {
                         char *fpath = c->files[G.graph_file_sel];
                         char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
@@ -2265,6 +2275,9 @@ static void handle_key(Key k){
                 if(G.graph_file_sel == -1) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                     load_commit_summary(c->hash);
+                } else if(G.graph_file_sel == 0) {
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                    G.diff_is_summary = false; load_diff_commit(c->hash);
                 } else {
                     char *fpath = c->files[G.graph_file_sel];
                     char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
@@ -2362,6 +2375,9 @@ static void handle_key(Key k){
                     if(G.graph_file_sel == -1) {
                         snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                         load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                    } else if(G.graph_file_sel == 0) {
+                        snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                        G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
                     } else {
                         char *fpath = c->files[G.graph_file_sel];
                         char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
@@ -2391,6 +2407,9 @@ static void handle_key(Key k){
                 if(G.graph_file_sel == -1) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                     load_commit_summary(c->hash);
+                } else if(G.graph_file_sel == 0) {
+                    snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
+                    G.diff_is_summary = false; load_diff_commit(c->hash);
                 } else {
                     char *fpath = c->files[G.graph_file_sel];
                     char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", c->hash, fpath);
