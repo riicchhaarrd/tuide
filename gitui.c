@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.7.5"
+#define VERSION        "2.8.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -165,7 +165,7 @@ typedef struct { char message[256],hash[16]; int index; } GitStash;
 typedef struct {
     char old_line[LINE_MAX_LEN], new_line[LINE_MAX_LEN];
     int old_lno, new_lno;
-    int type; /* 0=ctx 1=add 2=del 3=hunk 4=fhdr */
+    int type; /* 0=ctx 1=add 2=del 3=hunk 4=fhdr 5=file */
 } DiffLine;
 
 typedef struct { int btn,col,row; bool release,shift,ctrl; } MouseEvt;
@@ -218,8 +218,9 @@ typedef struct {
     /* Diff */
     DiffLine diff_lines[MAX_DIFF_LINES];
     int diff_count, diff_scroll, diff_hscroll;
-    char diff_title[512];
-    bool diff_staged, diff_sidebyside;
+    char diff_title[512], diff_commit[16];
+    bool diff_staged, diff_sidebyside, diff_is_summary;
+    int  diff_sel;
 
     /* Branches */
     GitBranch branches[MAX_BRANCHES];
@@ -681,7 +682,30 @@ static void parse_diff(const char *raw){
     }
     G.diff_scroll=0; G.diff_hscroll=0;
 }
+static void load_commit_summary(const char *hash){
+    char cmd[256]; snprintf(cmd,sizeof(cmd),"git show --name-only --format='%%s%%n%%b' %s 2>/dev/null",hash);
+    char *o=git_run(cmd); if(!o)return;
+    G.diff_count=0; G.diff_scroll=0; G.diff_sel=0; G.diff_is_summary=true;
+    snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", hash);
+    
+    char *line=o;
+    bool in_files=false;
+    while(*line && G.diff_count < MAX_DIFF_LINES){
+        char *nl=strchr(line,'\n');
+        size_t len=nl?(size_t)(nl-line):strlen(line);
+        if(len==0){ in_files=true; line=nl?nl+1:line+len; continue; }
+        
+        DiffLine *dl=&G.diff_lines[G.diff_count++]; memset(dl,0,sizeof(*dl));
+        if(len>=LINE_MAX_LEN)len=LINE_MAX_LEN-1;
+        memcpy(dl->new_line, line, len); dl->new_line[len]='\0';
+        dl->type = in_files ? 5 : 4;
+        line=nl?nl+1:line+len;
+    }
+    free(o);
+}
 static void load_diff_file(const char *path,bool staged){
+    G.diff_is_summary=false;
+    G.diff_commit[0]='\0';
     char cmd[1024];
     if(staged)snprintf(cmd,sizeof(cmd),"git diff --cached -- '%s' 2>/dev/null",path);
     else       snprintf(cmd,sizeof(cmd),"git diff -- '%s' 2>/dev/null",path);
@@ -1146,6 +1170,13 @@ static void draw_diff(int top,int rx,int rw,int h){
             case 4: /* File header */
                 if(strstr(dl->new_line, "+++") || strstr(dl->old_line, "---")) { row--; continue; } /* Skip these */
                 cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,code_w+lnum_w+2);break;
+            case 5: /* Commit summary file list item */ {
+                bool sel = (G.diff_is_summary && G.diff_sel == di && act);
+                if(sel) { cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true; }
+                else { cbg(TH->bg_base); cfg(TH->fg_accent1); }
+                char fbuf[LINE_MAX_LEN+4]; snprintf(fbuf, sizeof(fbuf), "  → %s", dl->new_line);
+                ppad(fbuf, code_w+lnum_w+2); break;
+            }
             }
             rst();
         }
@@ -1858,6 +1889,21 @@ static void handle_mouse(MouseEvt m){
             }
         } else if(in_r){
             if(cl)G.focus=FOCUS_DIFF;
+            if(cl && G.diff_is_summary){
+                int t = G.diff_scroll + (m.row - (ct+1));
+                if(t >= 0 && t < G.diff_count){
+                    G.diff_sel = t;
+                    DiffLine *dl = &G.diff_lines[t];
+                    if(dl->type == 5){
+                        char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.diff_commit, fpath);
+                        char *o = git_run(cmd);
+                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                        G.diff_is_summary = false;
+                        parse_diff(o?o:""); free(o);
+                    }
+                }
+            }
             if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
             if(sd)G.diff_scroll+=3;
         }
@@ -2072,7 +2118,7 @@ static void handle_key(Key k){
                 if(G.commit_count>0){
                     GitCommit *c=&G.commits[G.commit_sel];
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    G.diff_staged=false;load_diff_commit(c->hash);G.focus=FOCUS_DIFF;
+                    G.diff_staged=false; load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
                 }
                 break;
             default:break;
@@ -2080,16 +2126,44 @@ static void handle_key(Key k){
         } else { /* FOCUS_DIFF */
             int dv=G.rows-4;
             switch(k.type){
-            case KEY_UP:   G.diff_scroll=imax(0,G.diff_scroll-1);break;
-            case KEY_DOWN: G.diff_scroll++;break;
-            case KEY_PGUP: G.diff_scroll=imax(0,G.diff_scroll-dv);break;
-            case KEY_PGDN: G.diff_scroll+=dv;break;
-            case KEY_HOME: G.diff_scroll=0;break;
-            case KEY_END:  G.diff_scroll=G.diff_count;break;
+            case KEY_UP:   
+                if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-1);
+                else G.diff_scroll=imax(0,G.diff_scroll-1); break;
+            case KEY_DOWN: 
+                if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+1);
+                else G.diff_scroll++; break;
+            case KEY_PGUP: 
+                if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-dv);
+                else G.diff_scroll=imax(0,G.diff_scroll-dv); break;
+            case KEY_PGDN: 
+                if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+dv);
+                else G.diff_scroll+=dv; break;
+            case KEY_HOME: 
+                if(G.diff_is_summary) G.diff_sel = 0;
+                else G.diff_scroll=0; break;
+            case KEY_END:  
+                if(G.diff_is_summary) G.diff_sel = G.diff_count-1;
+                else G.diff_scroll=G.diff_count; break;
+            case KEY_ENTER:
+                if(G.diff_is_summary && G.diff_count > 0){
+                    DiffLine *dl = &G.diff_lines[G.diff_sel];
+                    if(dl->type == 5){
+                        char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.diff_commit, fpath);
+                        char *o = git_run(cmd);
+                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                        G.diff_is_summary = false;
+                        parse_diff(o?o:""); free(o);
+                    }
+                }
+                break;
             case KEY_CHAR:
                 if(k.ch=='s'||k.ch=='S')G.diff_sidebyside=!G.diff_sidebyside;
                 else if(k.ch=='['||k.ch=='h')G.diff_hscroll=imax(0,G.diff_hscroll-4);
                 else if(k.ch==']'||k.ch=='l')G.diff_hscroll+=4;
+                else if(k.ch=='q' && !G.diff_is_summary && G.diff_commit[0]) {
+                    load_commit_summary(G.diff_commit);
+                }
                 break;
             default:break;
             }
@@ -2114,7 +2188,7 @@ static void handle_key(Key k){
                 if(G.commit_count>0){
                     GitCommit *c=&G.commits[G.commit_sel];
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    load_diff_commit(c->hash);G.focus=FOCUS_DIFF;
+                    load_commit_summary(c->hash);G.focus=FOCUS_DIFF;
                 }
                 break;
             case KEY_CHAR:if(k.ch=='n')action_new_branch();break;
@@ -2126,17 +2200,43 @@ static void handle_key(Key k){
                 char exp[24];snprintf(exp,sizeof(exp),"commit %s:",c->hash);
                 if(strncmp(G.diff_title,exp,strlen(exp))!=0){
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    load_diff_commit(c->hash);
+                    load_commit_summary(c->hash);
                 }
             }
         } else {
             int dv=G.rows-4;
             switch(k.type){
-            case KEY_UP:   G.diff_scroll=imax(0,G.diff_scroll-1);break;
-            case KEY_DOWN: G.diff_scroll++;break;
-            case KEY_PGUP: G.diff_scroll=imax(0,G.diff_scroll-dv);break;
-            case KEY_PGDN: G.diff_scroll+=dv;break;
-            case KEY_CHAR:if(k.ch=='s')G.diff_sidebyside=!G.diff_sidebyside;break;
+            case KEY_UP:   
+                if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-1);
+                else G.diff_scroll=imax(0,G.diff_scroll-1); break;
+            case KEY_DOWN: 
+                if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+1);
+                else G.diff_scroll++; break;
+            case KEY_PGUP: 
+                if(G.diff_is_summary) G.diff_sel = imax(0, G.diff_sel-dv);
+                else G.diff_scroll=imax(0,G.diff_scroll-dv); break;
+            case KEY_PGDN: 
+                if(G.diff_is_summary) G.diff_sel = imin(G.diff_count-1, G.diff_sel+dv);
+                else G.diff_scroll+=dv; break;
+            case KEY_ENTER:
+                if(G.diff_is_summary && G.diff_count > 0){
+                    DiffLine *dl = &G.diff_lines[G.diff_sel];
+                    if(dl->type == 5){
+                        char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s -- '%s' 2>/dev/null", G.diff_commit, fpath);
+                        char *o = git_run(cmd);
+                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                        G.diff_is_summary = false;
+                        parse_diff(o?o:""); free(o);
+                    }
+                }
+                break;
+            case KEY_CHAR:
+                if(k.ch=='s') G.diff_sidebyside=!G.diff_sidebyside;
+                else if(k.ch=='q' && !G.diff_is_summary && G.diff_commit[0]) {
+                    load_commit_summary(G.diff_commit);
+                }
+                break;
             default:break;
             }
         }
