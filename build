@@ -1,0 +1,1 @@
+cc -std=c99 -O2 -o gitui gitui.c
