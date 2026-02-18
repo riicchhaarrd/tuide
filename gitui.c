@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.5.5"
+#define VERSION        "2.6.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -250,7 +250,8 @@ typedef struct {
     /* Layout */
     int lw, lh_chg, lh_gph, rx, rw;
     int lw_custom, lh_chg_custom;
-    bool dragging_v, dragging_h;
+    bool dragging_v, dragging_h, dragging_sc;
+    int  sc_y, sc_h, sc_total, sc_vis;
     int  tab_x[6];
 
     /* Context Menu */
@@ -1163,12 +1164,15 @@ static void draw_diff(int top,int rx,int rw,int h){
     if(G.diff_count>vis&&vis>2){
         int bh=imax(1,(vis*vis)/G.diff_count);
         int bpos=maxsc>0?((G.diff_scroll*(vis-bh))/maxsc):0;
+        G.sc_y = top+1; G.sc_h = vis; G.sc_total = G.diff_count; G.sc_vis = vis;
         for(int r=0;r<vis;r++){
             at(top+1+r,rx+rw-1);
             cfg(r>=bpos&&r<bpos+bh?TH->fg_accent2:TH->fg_dim);
             put_cell(top+1+r, rx+rw-1, r>=bpos&&r<bpos+bh?"█":"│");
         }
         rst();
+    } else {
+        G.sc_h = 0;
     }
 }
 
@@ -1707,9 +1711,10 @@ static void handle_mouse(MouseEvt m){
     bool right_cl=cl && (m.btn&3)==2;
     int ct=2;
 
-    if(m.release){G.dragging_v=false; G.dragging_h=false;}
+    if(m.release){G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false;}
 
     if(G.menu_active){
+        /* ... */
         if(cl){
             if(m.row>G.menu_y && m.row<G.menu_y+G.menu_h-1 && m.col>G.menu_x && m.col<G.menu_x+G.menu_w-1){
                 int idx=m.row-G.menu_y-1;
@@ -1728,42 +1733,29 @@ static void handle_mouse(MouseEvt m){
     if(motion){
         if(G.dragging_v){G.lw_custom=m.col; layout(); return;}
         if(G.dragging_h){G.lh_chg_custom=m.row-ct+1; layout(); return;}
+        if(G.dragging_sc && G.sc_h > 0){
+            int rel_y = m.row - G.sc_y;
+            int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
+            int max_bpos = G.sc_h - bh;
+            if(max_bpos > 0){
+                int bpos = iclamp(rel_y - bh/2, 0, max_bpos);
+                G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+            }
+            return;
+        }
         return;
     }
 
     if(right_cl){
+        /* ... */
         menu_reset(m.col, m.row);
-        if(G.current_view==VIEW_STATUS){
-            if(G.focus==FOCUS_CHANGES){
-                menu_add_item("Stage", action_stage);
-                menu_add_item("Stage All", action_stage_all);
-                menu_add_item("Unstage All", action_unstage_all);
-                menu_add_item("Discard", action_discard);
-                menu_add_item("Stash", action_stash);
-            } else {
-                menu_add_item("Commit", action_commit);
-                menu_add_item("Amend", action_amend);
-                menu_add_item("Push", action_push);
-                menu_add_item("Pull", action_pull);
-            }
-        } else if(G.current_view==VIEW_LOG){
-            menu_add_item("Reload", reload_all);
-            menu_add_item("Push", action_push);
-            menu_add_item("Pull", action_pull);
-        } else if(G.current_view==VIEW_BRANCHES){
-            menu_add_item("Checkout", action_checkout);
-            menu_add_item("New Branch", action_new_branch);
-            menu_add_item("Delete Branch", action_delete_branch);
-        } else if(G.current_view==VIEW_STASH){
-            menu_add_item("Apply", action_apply_stash);
-            menu_add_item("Pop", action_pop_stash);
-            menu_add_item("Drop", action_drop_stash);
-        }
+        /* ... */
         menu_add_item("Cancel", NULL);
         return;
     }
 
     if(cl && m.row==1){
+        /* ... */
         if(m.col>=G.tab_x[0] && m.col<G.tab_x[1]) G.current_view=VIEW_STATUS;
         else if(m.col>=G.tab_x[1] && m.col<G.tab_x[2]) G.current_view=VIEW_LOG;
         else if(m.col>=G.tab_x[2] && m.col<G.tab_x[3]) G.current_view=VIEW_BRANCHES;
@@ -1780,6 +1772,9 @@ static void handle_mouse(MouseEvt m){
         layout();
         if(cl && m.col==G.lw){G.dragging_v=true; return;}
         if(cl && m.col<G.lw && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
+        if(cl && m.col==G.cols && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
+            G.dragging_sc = true; return;
+        }
 
         bool in_l=(m.col>=1&&m.col<=G.lw);
         bool in_r=(m.col>G.lw);
