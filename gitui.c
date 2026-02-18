@@ -35,7 +35,7 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.5.0"
+#define VERSION        "2.5.1"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
@@ -805,7 +805,7 @@ static void draw_cli(void){
     }
     
     at(row, 4 + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0));
-    ppad(G.cli_buf + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0), len - G.cli_cursor);
+    ppad(G.cli_buf + G.cli_cursor + (G.cli_buf[G.cli_cursor]?1:0), len - G.cli_cursor - (G.cli_buf[G.cli_cursor]?1:0));
     
     int used = 3 + len;
     at(row, 1 + used);
@@ -1177,31 +1177,39 @@ static void draw_log(int top,int h){
         GitCommit *c=&G.commits[i];
         bool sel=(G.commit_sel==i);
         at(row,2);
-        if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+        if(sel){cbg(TH->bg_sel);G.cur_bold=true;}else cbg(TH->bg_base);
 
         /* graph */
         char *gp=c->graph; int gc=0;
         while(*gp&&gc<GRAPH_COLS){
             int ci_=(c->graph_col/2)%6;
-            if(*gp=='*'){cfg(TH->fg_graph[ci_]);printf(T_BOLD);putchar('*');}
-            else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);putchar('|');}
-            else{cfg(TH->fg_graph[0]);putchar(*gp);}
-            rst(); if(sel){cbg(TH->bg_sel);printf(T_BOLD);}else cbg(TH->bg_base);
+            at(row, 2+gc);
+            if(*gp=='*'){cfg(TH->fg_graph[ci_]);G.cur_bold=true;put_cell(row,2+gc,"●");}
+            else if(*gp=='|'){cfg(TH->fg_graph[gc/2%6]);put_cell(row,2+gc,"|");}
+            else { char tmp[2]={*gp,0}; put_cell(row,2+gc,tmp); }
+            rst(); if(sel){cbg(TH->bg_sel);G.cur_bold=true;}else cbg(TH->bg_base);
             gp++;gc++;
         }
-        while(gc<GRAPH_COLS){putchar(' ');gc++;}
+        while(gc<GRAPH_COLS){at(row, 2+gc); put_cell(row,2+gc," ");gc++;}
 
-        cfg(sel?TH->fg_sel:TH->fg_accent1);printf(T_BOLD);printf("%.8s ",c->hash);rst();
+        at(row, 2+GRAPH_COLS);
+        cfg(sel?TH->fg_sel:TH->fg_accent1);G.cur_bold=true; char hbuf[16]; snprintf(hbuf,sizeof(hbuf),"%.8s ",c->hash); ppad(hbuf, 9); rst();
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_base);
-        if(c->refs[0]){cfg(sel?TH->fg_sel:TH->fg_ref_local);char rf[32];snprintf(rf,sizeof(rf),"(%.18s) ",c->refs);ppad(rf,21);}
-        cfg(sel?TH->fg_sel:TH->fg_accent2);ppad(c->author,14);
-        cfg(sel?TH->fg_sel:TH->fg_accent3);printf(" %-13s ",c->date);
+        if(c->refs[0]){
+            cfg(sel?TH->fg_sel:TH->fg_ref_local);
+            char rf[32];snprintf(rf,sizeof(rf),"(%.18s) ",c->refs);
+            ppad(rf,21);
+        } else {
+            ppad("", 21);
+        }
+        cfg(sel?TH->fg_sel:TH->fg_accent2);ppad(c->author,14); ppad(" ", 1);
+        cfg(sel?TH->fg_sel:TH->fg_accent3);ppad(c->date, 13); ppad(" ", 1);
         int used=GRAPH_COLS+10+21+14+15;
         int sw=w-3-used;
         if(sw>0){cfg(sel?TH->fg_sel:TH->fg_normal);ppad(c->subject,sw);}
         rst();
     }
-    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<w-3;i++)putchar(' ');rst();row++;}
+    while(row<lim){at(row,2);cbg(TH->bg_base);for(int i=0;i<w-3;i++)put_cell(row,2+i," ");rst();row++;}
 }
 
 /* ================================================================
@@ -1219,27 +1227,31 @@ static void draw_branches(int top,int h){
     if(G.branch_sel>=G.branch_scroll+vis)G.branch_scroll=G.branch_sel-vis+1;
 
     /* header */
-    at(row,2);cbg(TH->bg_header);cfg(TH->fg_accent3);printf(T_BOLD);
-    printf("  %-2s %-40s %-28s %s","★","Name","Upstream","±");
-    for(int i=0;i<w-78;i++)putchar(' ');
+    at(row,2);cbg(TH->bg_header);cfg(TH->fg_accent3);G.cur_bold=true;
+    char hdb[256]; snprintf(hdb, sizeof(hdb), "  %-2s %-40s %-28s %s", "★", "Name", "Upstream", "±");
+    ppad(hdb, w-3);
     rst();row++;
 
     for(int i=G.branch_scroll;i<G.branch_count&&row<lim;i++,row++){
         GitBranch *b=&G.branches[i]; bool sel=(G.branch_sel==i);
         at(row,2);
-        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
-        if(b->is_current){cfg(sel?TH->fg_sel:TH->fg_staged);printf(T_BOLD);printf("✱ ");}else printf("  ");
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}else cbg(TH->bg_panel);
+        if(b->is_current){cfg(sel?TH->fg_sel:TH->fg_staged);G.cur_bold=true;ppad("✱ ", 2);}else ppad("  ", 2);
         if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);}else cbg(TH->bg_panel);
-        if(b->is_remote){cfg(sel?TH->fg_sel:TH->fg_ref_remote);printf("⬡ ");}
-        else{cfg(sel?TH->fg_sel:TH->fg_ref_local);printf("⬢ ");}
+        if(b->is_remote){cfg(sel?TH->fg_sel:TH->fg_ref_remote);ppad("⬡ ", 2);}
+        else{cfg(sel?TH->fg_sel:TH->fg_ref_local);ppad("⬢ ", 2);}
         if(sel){cfg(TH->fg_sel);}else cfg(TH->fg_normal);
-        char nb[42]; snprintf(nb,sizeof(nb),"%-40s",b->name); ppad(nb,40); printf(" ");
-        ppad(b->upstream,28); printf(" ");
-        if(b->ahead||b->behind){cfg(sel?TH->fg_sel:TH->fg_accent1);printf("↑%d ↓%d",b->ahead,b->behind);}
-        else if(b->upstream[0]){cfg(sel?TH->fg_sel:TH->fg_staged);printf("✓");}
+        char nb[42]; snprintf(nb,sizeof(nb),"%-40s",b->name); ppad(nb,40); ppad(" ", 1);
+        ppad(b->upstream,28); ppad(" ", 1);
+        if(b->ahead||b->behind){
+            cfg(sel?TH->fg_sel:TH->fg_accent1);
+            char ab[32]; snprintf(ab,sizeof(ab),"↑%d ↓%d",b->ahead,b->behind);
+            ppad(ab, (int)strlen(ab));
+        }
+        else if(b->upstream[0]){cfg(sel?TH->fg_sel:TH->fg_staged);ppad("✓", 1);}
         rst();
     }
-    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<w-3;i++)putchar(' ');rst();row++;}
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<w-3;i++)put_cell(row,2+i," ");rst();row++;}
 }
 
 /* ================================================================
@@ -1255,18 +1267,19 @@ static void draw_stash(int top,int h){
     int row=top+1,lim=top+h-1;
     if(!G.stash_count){
         at(row+2,G.cols/2-14);
-        cfg(TH->fg_dim);printf("No stashes. Press 's' to stash changes.");rst();return;
+        cfg(TH->fg_dim);ppad("No stashes. Press 's' to stash changes.", 38);rst();return;
     }
     for(int i=0;i<G.stash_count&&row<lim;i++,row++){
         bool sel=(G.stash_sel==i);
         at(row,2);
-        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);printf(T_BOLD);}else cbg(TH->bg_panel);
-        cfg(sel?TH->fg_sel:TH->fg_accent1);printf(T_BOLD);printf(" stash@{%d} ",G.stashes[i].index);
-        cfg(sel?TH->fg_sel:TH->fg_accent3);printf("%.8s  ",G.stashes[i].hash);
+        if(sel){cbg(TH->bg_sel);cfg(TH->fg_sel);G.cur_bold=true;}else cbg(TH->bg_panel);
+        cfg(sel?TH->fg_sel:TH->fg_accent1);G.cur_bold=true;
+        char sibuf[16]; snprintf(sibuf,sizeof(sibuf)," stash@{%d} ",G.stashes[i].index); ppad(sibuf, (int)strlen(sibuf));
+        cfg(sel?TH->fg_sel:TH->fg_accent3); char hbuf[16]; snprintf(hbuf,sizeof(hbuf),"%.8s  ",G.stashes[i].hash); ppad(hbuf, 10);
         cfg(sel?TH->fg_sel:TH->fg_normal);ppad(G.stashes[i].message,w-28);
         rst();
     }
-    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<w-3;i++)putchar(' ');rst();row++;}
+    while(row<lim){at(row,2);cbg(TH->bg_panel);for(int i=0;i<w-3;i++)put_cell(row,2+i," ");rst();row++;}
 }
 
 /* ================================================================
@@ -1344,12 +1357,12 @@ static void draw_help(int top,int h){
     for(int i=0;E[i][0]&&row<lim;i++,row++){
         at(row,2); cbg(TH->bg_panel);
         if(E[i][1][0]=='\0'&&strlen(E[i][0])>1){
-            cfg(TH->fg_accent1);printf(T_BOLD);ppad(E[i][0],split-3);
+            cfg(TH->fg_accent1);G.cur_bold=true;ppad(E[i][0],split-3);
         } else if(!E[i][0][0]){
-            for(int k=0;k<G.cols-3;k++)putchar(' ');
+            for(int k=0;k<G.cols-3;k++)put_cell(row, 2+k, " ");
         } else {
-            cfg(TH->fg_accent2);printf(T_BOLD);ppad(E[i][0],split-3);
-            at(row,split);cbg(TH->bg_panel);cfg(TH->fg_normal);rst();cbg(TH->bg_panel);
+            cfg(TH->fg_accent2);G.cur_bold=true;ppad(E[i][0],split-3);
+            at(row,split);cbg(TH->bg_panel);cfg(TH->fg_normal);
             ppad(E[i][1],G.cols-split-2);
         }
         rst();
@@ -1363,19 +1376,36 @@ static void draw_help(int top,int h){
 static void draw_prompt_overlay(void){
     if(!G.in_prompt)return;
     at(G.rows-1,1);
-    cbg(TH->bg_tab_act);cfg(TH->fg_accent2);printf(T_BOLD);
-    printf(" %s ",G.prompt_label);
+    cbg(TH->bg_tab_act);cfg(TH->fg_accent2);G.cur_bold=true;
+    char lbuf[132]; snprintf(lbuf, sizeof(lbuf), " %s ", G.prompt_label);
+    ppad(lbuf, (int)strlen(lbuf));
     rst(); cbg(TH->bg_panel);cfg(TH->fg_bright);
-    printf(" ");
-    if(G.prompt_obscure){for(int i=0;i<G.prompt_cursor;i++)putchar('*');}
-    else printf("%.*s",G.prompt_cursor,G.prompt_buf);
+    ppad(" ", 1);
+    
+    int label_len = (int)strlen(G.prompt_label) + 3;
+    at(G.rows-1, label_len);
+    if(G.prompt_obscure){
+        for(int i=0;i<G.prompt_cursor;i++) put_cell(G.rows-1, label_len+i, "*");
+    } else {
+        ppad(G.prompt_buf, G.prompt_cursor);
+    }
+    
+    at(G.rows-1, label_len + G.prompt_cursor);
     cbg(TH->fg_accent1);cfg(TH->bg_base);
     char nc=G.prompt_buf[G.prompt_cursor];
-    putchar(nc?nc:' '); rst();
+    char ncs[2] = {nc?nc:' ', 0};
+    put_cell(G.rows-1, label_len + G.prompt_cursor, ncs);
+    rst();
+    
     cbg(TH->bg_panel);cfg(TH->fg_bright);
-    if(!G.prompt_obscure)printf("%s",G.prompt_buf+G.prompt_cursor+(nc?1:0));
+    if(!G.prompt_obscure){
+        at(G.rows-1, label_len + G.prompt_cursor + 1);
+        ppad(G.prompt_buf+G.prompt_cursor+(nc?1:0), (int)strlen(G.prompt_buf) - G.prompt_cursor - (nc?1:0));
+    }
+    
     int used=(int)strlen(G.prompt_label)+3+(int)strlen(G.prompt_buf)+2;
-    for(int i=used;i<G.cols;i++)putchar(' ');
+    at(G.rows-1, used);
+    for(int i=used;i<G.cols;i++) put_cell(G.rows-1, 1+i, " ");
     rst();
 }
 
