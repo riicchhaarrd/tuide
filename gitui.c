@@ -227,6 +227,7 @@ typedef struct {
     char diff_title[512], diff_commit[16];
     bool diff_staged, diff_sidebyside, diff_is_summary, diff_continuous;
     int  diff_sel;
+    int  diff_split, diff_split_custom;
 
     /* Branches */
     GitBranch branches[MAX_BRANCHES];
@@ -257,7 +258,7 @@ typedef struct {
     /* Layout */
     int lw, lh_chg, lh_gph, rx, rw;
     int lw_custom, lh_chg_custom;
-    bool dragging_v, dragging_h, dragging_sc;
+    bool dragging_v, dragging_h, dragging_sc, dragging_diff;
     int  sc_y, sc_h, sc_total, sc_vis;
     int  tab_x[6];
 
@@ -489,6 +490,9 @@ static void layout(void){
     
     G.lh_gph=ch-G.lh_chg+1;
     if(G.lh_gph<4){G.lh_gph=4; G.lh_chg=ch-G.lh_gph+1;}
+
+    if(G.diff_split_custom > 0) G.diff_split = iclamp(G.diff_split_custom, 10, G.rw-10);
+    else G.diff_split = G.rw / 2;
 }
 
 /* ================================================================
@@ -1223,10 +1227,11 @@ static void draw_diff(int top,int rx,int rw,int h){
 
     bool ssb=G.diff_sidebyside;
     int lnum_w=4;
-    int content_w = rw - 6;
-    int half=content_w/2;
-    int code_w=ssb?(half-lnum_w-2):(content_w-lnum_w-2);
-    if(code_w<8)code_w=8;
+    int half = G.diff_split;
+    int code_w_left = half - lnum_w - 2;
+    int code_w_right = (rw - half) - lnum_w - 3;
+    if(code_w_left<2)code_w_left=2;
+    if(code_w_right<2)code_w_right=2;
 
     /* Column headers for side-by-side */
     if(ssb){
@@ -1236,7 +1241,7 @@ static void draw_diff(int top,int rx,int rw,int h){
         /* Header */
         at(row,rx+1); cbg(TH->bg_header); cfg(TH->fg_accent3); G.cur_bold=true;
         ppad(" ◀ OLD",half-1);
-        at(row,rx+half+1); ppad(" NEW ▶ ",half-1);
+        at(row,rx+half+1); ppad(" NEW ▶ ", (rw - half)-1);
         rst(); row++; lim--; vis--;
         if(G.diff_scroll>imax(0,G.diff_count-vis))G.diff_scroll=imax(0,G.diff_count-vis);
     }
@@ -1244,6 +1249,8 @@ static void draw_diff(int top,int rx,int rw,int h){
     int di=G.diff_scroll;
     if(!ssb){
         /* Unified */
+        int code_w = rw - lnum_w - 6;
+        if(code_w < 8) code_w = 8;
         for(;di<G.diff_count&&row<lim;di++,row++){
             DiffLine *dl=&G.diff_lines[di];
             at(row,rx+1);
@@ -1263,19 +1270,19 @@ static void draw_diff(int top,int rx,int rw,int h){
                 char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                 if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                 snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
-                ppad(hsub, content_w+lnum_w+2); break;
+                ppad(hsub, rw-2); break;
             case 4: /* File header */
-                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,content_w+lnum_w+2);break;
+                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);break;
             case 5: /* Commit summary file list item */ {
                 bool sel = (G.diff_is_summary && G.diff_sel == di && act);
                 if(sel) { cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true; }
                 else { cbg(TH->bg_base); cfg(TH->fg_accent1); }
                 char fbuf[LINE_MAX_LEN+4]; snprintf(fbuf, sizeof(fbuf), "  → %s", dl->new_line);
-                ppad(fbuf, content_w+lnum_w+2); break;
+                ppad(fbuf, rw-2); break;
             }
             case 6: /* Metadata / Info */
                 cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
-                ppad(dl->new_line[0] ? dl->new_line : dl->old_line, content_w+lnum_w+2);
+                ppad(dl->new_line[0] ? dl->new_line : dl->old_line, rw-2);
                 G.cur_italic=false; break;
             }
             rst();
@@ -1291,13 +1298,20 @@ static void draw_diff(int top,int rx,int rw,int h){
                     char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                     if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                     snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
-                    G.cur_bold=true; ppad(hsub,content_w+lnum_w+2);
+                    G.cur_bold=true; 
+                    ppad(hsub, half-1);
+                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
+                    at(row, rx+half+1); cbg(TH->bg_diff_hdr); ppad("", (rw-half)-1);
                 } else if(dl->type==4) {
                     cbg(TH->bg_header);cfg(TH->fg_accent2); G.cur_bold=true;
-                    ppad(dl->new_line[0]?dl->new_line:dl->old_line,content_w+lnum_w+2);
+                    ppad(dl->new_line[0]?dl->new_line:dl->old_line, half-1);
+                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
+                    at(row, rx+half+1); cbg(TH->bg_header); ppad("", (rw-half)-1);
                 } else {
                     cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
-                    ppad(dl->new_line[0]?dl->new_line:dl->old_line,content_w+lnum_w+2);
+                    ppad(dl->new_line[0]?dl->new_line:dl->old_line, half-1);
+                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
+                    at(row, rx+half+1); cbg(TH->bg_panel); ppad("", (rw-half)-1);
                     G.cur_italic=false;
                 }
                 rst(); di++; row++; continue;
@@ -1305,10 +1319,10 @@ static void draw_diff(int top,int rx,int rw,int h){
             if(dl->type==0){
                 at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
                 char lno[16]; snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad(lno, lnum_w+1);
-                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w);
+                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w_left);
                 at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
                 snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno); ppad(lno, lnum_w+1);
-                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w);
+                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w_right);
                 rst(); di++; row++; continue;
             }
             /* Handle blocks of deletions and additions */
@@ -1327,12 +1341,12 @@ static void draw_diff(int top,int rx,int rw,int h){
                     if (od) {
                         cbg(TH->bg_diff_del); cfg(TH->fg_linenum);
                         char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, od->old_lno);
-                        ppad(lno, lnum_w + 1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold = true; ppad(od->old_line, code_w);
+                        ppad(lno, lnum_w + 1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold = true; ppad(od->old_line, code_w_left);
                     } else {
                         cbg(TH->bg_panel); cfg(TH->fg_dim);
                         for (int j = 0; j < lnum_w + 1; j++) put_cell(row, rx + 1 + j, " ");
                         put_cell(row, rx + 1 + lnum_w + 1, "┆");
-                        for (int j = 0; j < code_w; j++) put_cell(row, rx + 1 + lnum_w + 2 + j, " ");
+                        for (int j = 0; j < code_w_left; j++) put_cell(row, rx + 1 + lnum_w + 2 + j, " ");
                     }
                     rst();
 
@@ -1341,12 +1355,12 @@ static void draw_diff(int top,int rx,int rw,int h){
                     if (nd) {
                         cbg(TH->bg_diff_add); cfg(TH->fg_linenum);
                         char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, nd->new_lno);
-                        ppad(lno, lnum_w + 1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold = true; ppad(nd->new_line, code_w);
+                        ppad(lno, lnum_w + 1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold = true; ppad(nd->new_line, code_w_right);
                     } else {
                         cbg(TH->bg_panel); cfg(TH->fg_dim);
                         for (int j = 0; j < lnum_w + 1; j++) put_cell(row, rx + half + 1 + j, " ");
                         put_cell(row, rx + half + 1 + lnum_w + 1, "┆");
-                        for (int j = 0; j < code_w; j++) put_cell(row, rx + half + 1 + lnum_w + 2 + j, " ");
+                        for (int j = 0; j < code_w_right; j++) put_cell(row, rx + half + 1 + lnum_w + 2 + j, " ");
                     }
                     rst();
                 }
@@ -1932,7 +1946,7 @@ static void handle_mouse(MouseEvt m){
     bool right_cl=cl && (m.btn&3)==2;
     int ct=2;
 
-    if(m.release){G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false;}
+    if(m.release){G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false; G.dragging_diff=false;}
 
     if(G.menu_active){
         /* ... */
@@ -1954,6 +1968,7 @@ static void handle_mouse(MouseEvt m){
     if(motion){
         if(G.dragging_v){G.lw_custom=m.col; layout(); return;}
         if(G.dragging_h){G.lh_chg_custom=m.row-ct+1; layout(); return;}
+        if(G.dragging_diff){G.diff_split_custom=m.col-G.rx; layout(); return;}
         if(G.dragging_sc && G.sc_h > 0){
             int rel_y = m.row - G.sc_y;
             int bh = imax(1, (G.sc_vis * G.sc_vis) / G.sc_total);
@@ -1993,6 +2008,7 @@ static void handle_mouse(MouseEvt m){
         layout();
         if(cl && m.col==G.lw){G.dragging_v=true; return;}
         if(cl && m.col<G.lw && m.row==ct+G.lh_chg-1){G.dragging_h=true; return;}
+        if(cl && G.diff_sidebyside && m.col==G.rx+G.diff_split){G.dragging_diff=true; return;}
         if(cl && m.col==G.cols && G.sc_h > 0 && m.row >= G.sc_y && m.row < G.sc_y + G.sc_h){
             G.dragging_sc = true;
             int rel_y = m.row - G.sc_y;
@@ -2045,7 +2061,7 @@ static void handle_mouse(MouseEvt m){
                         } else {
                             G.graph_file_sel = -1;
                             snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
-                            load_commit_summary(G.commits[ci].hash);
+                            G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
                         }
                     } else {
                         /* Clicked on a file under a commit */
@@ -2084,8 +2100,8 @@ static void handle_mouse(MouseEvt m){
                     }
                 }
             }
-            if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
-            if(sd)G.diff_scroll+=3;
+            if(su)G.diff_scroll=imax(0,G.diff_scroll-1);
+            if(sd)G.diff_scroll+=1;
         }
     } else if(G.current_view==VIEW_LOG){
         int lh=(G.rows-2)*55/100;
@@ -2103,8 +2119,8 @@ static void handle_mouse(MouseEvt m){
                 }
             }
         } else {
-            if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
-            if(sd)G.diff_scroll+=3;
+            if(su)G.diff_scroll=imax(0,G.diff_scroll-1);
+            if(sd)G.diff_scroll+=1;
         }
     } else if(G.current_view==VIEW_BRANCHES){
         int vis=G.rows-4;
@@ -2238,7 +2254,7 @@ static void handle_key(Key k){
                  else if (G.current_view == VIEW_STATUS && G.focus == FOCUS_GRAPH) {
                      /* Re-trigger whatever is currently showing in graph */
                      GitCommit *c = &G.commits[G.commit_sel];
-                     if (G.graph_file_sel == -1) load_commit_summary(c->hash);
+                     if (G.graph_file_sel == -1) { G.diff_is_summary = false; load_diff_commit(c->hash); }
                      else if (G.graph_file_sel == 0) load_diff_commit(c->hash);
                      else {
                          char *fpath = c->files[G.graph_file_sel];
@@ -2345,7 +2361,7 @@ static void handle_key(Key k){
                     GitCommit *c=&G.commits[G.commit_sel];
                     if(G.graph_file_sel == -1) {
                         snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                        G.diff_staged=false; load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                        G.diff_staged=false; G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
                     } else if(G.graph_file_sel == 0) {
                         snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                         G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
@@ -2388,7 +2404,7 @@ static void handle_key(Key k){
                 GitCommit *c = &G.commits[G.commit_sel];
                 if(G.graph_file_sel == -1) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    load_commit_summary(c->hash);
+                    G.diff_is_summary = false; load_diff_commit(c->hash);
                 } else if(G.graph_file_sel == 0) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                     G.diff_is_summary = false; load_diff_commit(c->hash);
@@ -2440,8 +2456,12 @@ static void handle_key(Key k){
                 break;
             case KEY_CHAR:
                 if(k.ch=='s'||k.ch=='S')G.diff_sidebyside=!G.diff_sidebyside;
-                else if(k.ch=='['||k.ch=='h')G.diff_hscroll=imax(0,G.diff_hscroll-4);
-                else if(k.ch==']'||k.ch=='l')G.diff_hscroll+=4;
+                else if(k.ch=='[') { G.diff_split_custom = G.diff_split - 4; layout(); }
+                else if(k.ch==']') { G.diff_split_custom = G.diff_split + 4; layout(); }
+                else if(k.ch=='<') { G.diff_split_custom = G.diff_split - 1; layout(); }
+                else if(k.ch=='>') { G.diff_split_custom = G.diff_split + 1; layout(); }
+                else if(k.ch=='h')G.diff_hscroll=imax(0,G.diff_hscroll-4);
+                else if(k.ch=='l')G.diff_hscroll+=4;
                 else if(k.ch=='q' && !G.diff_is_summary && G.diff_commit[0]) {
                     load_commit_summary(G.diff_commit);
                 }
@@ -2490,7 +2510,7 @@ static void handle_key(Key k){
                     GitCommit *c=&G.commits[G.commit_sel];
                     if(G.graph_file_sel == -1) {
                         snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                        load_commit_summary(c->hash); G.focus=FOCUS_DIFF;
+                        G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
                     } else if(G.graph_file_sel == 0) {
                         snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                         G.diff_is_summary = false; load_diff_commit(c->hash); G.focus=FOCUS_DIFF;
@@ -2523,7 +2543,7 @@ static void handle_key(Key k){
                 GitCommit *c=&G.commits[G.commit_sel];
                 if(G.graph_file_sel == -1) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
-                    load_commit_summary(c->hash);
+                    G.diff_is_summary = false; load_diff_commit(c->hash);
                 } else if(G.graph_file_sel == 0) {
                     snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",c->hash,c->subject);
                     G.diff_is_summary = false; load_diff_commit(c->hash);
@@ -2569,6 +2589,10 @@ static void handle_key(Key k){
                 break;
             case KEY_CHAR:
                 if(k.ch=='s') G.diff_sidebyside=!G.diff_sidebyside;
+                else if(k.ch=='[') { G.diff_split_custom = G.diff_split - 4; layout(); }
+                else if(k.ch==']') { G.diff_split_custom = G.diff_split + 4; layout(); }
+                else if(k.ch=='<') { G.diff_split_custom = G.diff_split - 1; layout(); }
+                else if(k.ch=='>') { G.diff_split_custom = G.diff_split + 1; layout(); }
                 else if(k.ch=='q' && !G.diff_is_summary && G.diff_commit[0]) {
                     load_commit_summary(G.diff_commit);
                 }
