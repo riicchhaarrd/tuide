@@ -1126,14 +1126,14 @@ static void draw_statusbar(void){
         if(G.focus==FOCUS_CHANGES) hint="e:edit  SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme";
         else if(G.focus==FOCUS_GRAPH) hint="e:edit  ↑/↓:move  ↵:diff  Home/End:top/bot  T:theme";
         else if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open  ←:back  b:close";
-        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  e:toggle diff";
+        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  Ctrl+Z:undo  Ctrl+Y:redo  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  e:toggle diff";
         else hint="↑/↓:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
     } else if(G.current_view==VIEW_LOG) hint="e:edit  ↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
     else if(G.current_view==VIEW_EDITOR) {
         if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open/enter  ←:back  Tab:editor";
-        else hint="Arrows:move  Shift+Arrows:select  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  f:files";
+        else hint="Arrows:move  Shift+Arrows:select  Ctrl+Z:undo  Ctrl+Y:redo  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  f:files";
     }
     else if(G.current_view==VIEW_HELP) hint="q:close help";
     
@@ -1811,8 +1811,13 @@ static void draw_help(int top,int h){
         {"  Arrows","Move cursor"},
         {"  Enter","Insert newline"},
         {"  BS","Delete character"},
+        {"  Ctrl+Z","Undo"},
+        {"  Ctrl+Y","Redo"},
         {"  Ctrl+S","Save file"},
+        {"  Ctrl+X","Cut selection"},
+        {"  Ctrl+C / y","Copy selection"},
         {"  Ctrl+V","Paste from clipboard"},
+        {"  Shift+Arrows","Extend text selection"},
         {"",""},
         {"FILE BROWSER",""},
         {"  b","Toggle Browser visibility (left pane)"},
