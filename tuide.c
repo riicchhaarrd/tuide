@@ -179,6 +179,7 @@ typedef struct {
     int scroll_y, scroll_x;
     char filename[512];
     bool modified;
+    uint64_t saved_hash; /* FNV-64 hash of content at last save/load */
     /* Undo/redo stacks */
     HistEntry undo_stack[MAX_UNDO];
     int       undo_top;      /* 0 = empty */
@@ -2000,6 +2001,16 @@ static void action_grep(const char *pattern){
     G.focus = FOCUS_DIFF;
 }
 
+/* FNV-1a 64-bit hash of all editor lines (joined by '\n') */
+static uint64_t editor_content_hash(Editor *ed){
+    uint64_t h = 14695981039346656037ULL;
+    for(int i=0; i<ed->line_count; i++){
+        for(const char *s=ed->lines[i]; *s; s++){ h^=(unsigned char)*s; h*=1099511628211ULL; }
+        h^='\n'; h*=1099511628211ULL;
+    }
+    return h;
+}
+
 static void editor_free(Editor *ed){
     for(int i=0; i<ed->line_count; i++) free(ed->lines[i]);
     free(ed->lines);
@@ -2072,6 +2083,8 @@ static void editor_undo(Editor *ed){
     HistEntry e = ed->undo_stack[--ed->undo_top];
     editor_restore_snapshot(ed, e.text, e.cy, e.cx);
     free(e.text);
+    /* Clear modified flag if we've returned to the saved state */
+    if(editor_content_hash(ed) == ed->saved_hash) ed->modified = false;
     OK("Undo");
 }
 
@@ -2084,6 +2097,8 @@ static void editor_redo(Editor *ed){
     HistEntry e = ed->redo_stack[--ed->redo_top];
     editor_restore_snapshot(ed, e.text, e.cy, e.cx);
     free(e.text);
+    /* Clear modified flag if we've returned to the saved state */
+    if(editor_content_hash(ed) == ed->saved_hash) ed->modified = false;
     OK("Redo");
 }
 
@@ -2118,6 +2133,8 @@ static void editor_load(const char *path){
         t->ed.lines[t->ed.line_count++] = strdup(buf);
     }
     fclose(fp);
+    /* Record content hash so undo can detect return to clean state */
+    t->ed.saved_hash = editor_content_hash(&t->ed);
 }
 
 static void editor_next_tab(void){
@@ -2145,6 +2162,7 @@ static void editor_save(void){
     }
     fclose(fp);
     t->ed.modified = false;
+    t->ed.saved_hash = editor_content_hash(&t->ed); /* update clean baseline */
     OK("Saved %s", t->path);
 }
 
@@ -3572,6 +3590,16 @@ static void handle_key(Key k){
         case KEY_DEL:
             if(G.ed_selecting) editor_delete_selection();
             else editor_delete_forward(); break;
+        case KEY_CTRL_A:
+            if(CUR_ED.line_count > 0){
+                G.ed_selecting = true;
+                G.ed_sel_start_y = 0; G.ed_sel_start_x = 0;
+                G.ed_sel_end_y = CUR_ED.line_count - 1;
+                G.ed_sel_end_x = (int)strlen(CUR_ED.lines[CUR_ED.line_count - 1]);
+                CUR_ED.cur_y = G.ed_sel_end_y;
+                CUR_ED.cur_x = G.ed_sel_end_x;
+            }
+            break;
         case KEY_CTRL_S:editor_save(); break;
         case KEY_CTRL_V:editor_paste(); break;
         case KEY_CTRL_X:editor_cut_selection(); break;
