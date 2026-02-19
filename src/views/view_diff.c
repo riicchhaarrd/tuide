@@ -35,8 +35,10 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 		snprintf(title, sizeof(title), "Diff (select file or commit)");
 
 	char extra[64];
-	snprintf(extra, sizeof(extra), " [%s] [%s] ", g_app_state.diff_sidebyside ? "Split" : "Unify",
-			 g_app_state.diff_continuous ? "Full" : "Hunk");
+	const char *wrap_label = g_app_state.diff_wrap ? "Wrap" : "NoWrap";
+	snprintf(extra, sizeof(extra), " [%s] [%s] [%s] ",
+			 g_app_state.diff_sidebyside ? "Split" : "Unify",
+			 g_app_state.diff_continuous ? "Full" : "Hunk", wrap_label);
 
 	box_top(top, render_x, render_width, title, act, extra);
 	box_sides(top, render_x, render_width, h, act);

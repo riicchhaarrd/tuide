@@ -436,16 +436,34 @@ static void handle_mouse(MouseEvt m) {
 	if (cl && m.row == toggle_row && m.col > toggle_min_x) {
 		if (!editor_visible) {
 			g_app_state.focus = FOCUS_DIFF;
-			int unify_x = g_app_state.cols - 16;
-			int hunk_x = g_app_state.cols - 8;
-			if (m.col >= unify_x && m.col < unify_x + 8) {
+			const char *label_side = g_app_state.diff_sidebyside ? "Split" : "Unify";
+			const char *label_ctx = g_app_state.diff_continuous ? "Full" : "Hunk";
+			const char *label_wrap = g_app_state.diff_wrap ? "Wrap" : "NoWrap";
+			char extra[64];
+			snprintf(extra, sizeof(extra), " [%s] [%s] [%s] ", label_side, label_ctx,
+					 label_wrap);
+			int elen = (int)strlen(extra);
+			int start_x = g_app_state.cols - elen - 1;
+
+			int btn1_start = start_x + 1;
+			int btn1_len = (int)strlen(label_side) + 2;
+			int btn2_start = btn1_start + btn1_len + 1;
+			int btn2_len = (int)strlen(label_ctx) + 2;
+			int btn3_start = btn2_start + btn2_len + 1;
+			int btn3_len = (int)strlen(label_wrap) + 2;
+
+			if (m.col >= btn1_start && m.col < btn1_start + btn1_len) {
 				g_app_state.diff_sidebyside = !g_app_state.diff_sidebyside;
 				return;
 			}
-			if (m.col >= hunk_x && m.col < hunk_x + 7) {
+			if (m.col >= btn2_start && m.col < btn2_start + btn2_len) {
 				g_app_state.diff_continuous = !g_app_state.diff_continuous;
 				sync_graph_preview();
 				update_diff();
+				return;
+			}
+			if (m.col >= btn3_start && m.col < btn3_start + btn3_len) {
+				g_app_state.diff_wrap = !g_app_state.diff_wrap;
 				return;
 			}
 		} else {
