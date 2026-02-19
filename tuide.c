@@ -106,8 +106,10 @@ static const Theme TH_DARK = {
     {30,30,30},{37,37,38},{58,58,58},{30,30,30},{45,45,45},{50,50,50},
     {19,41,19},{51,18,18},{25,40,60},
     {212,212,212},{90,90,90},{255,255,255},{255,255,255},
-    {220,220,170},{156,220,254},{103,150,100},
-    {78,201,176},{244,71,71},{128,128,128},{252,100,100},
+    /* accent1=keywords(blue), accent2=numbers/enum(yellow-green), accent3=comment(green-gray) */
+    {86,156,214},{220,220,170},{106,153,85},
+    /* staged=types(teal), unstaged=strings(orange), untracked=gray, conflict=red */
+    {78,201,176},{206,145,120},{128,128,128},{252,100,100},
     {130,255,130},{255,100,100},{86,156,214},{180,180,180},
     {{86,156,214},{220,220,170},{78,201,176},{215,186,125},{244,71,71},{197,134,192}},
     {78,201,176},{197,134,192},{220,220,170},
@@ -263,7 +265,7 @@ typedef struct {
     DiffLine diff_lines[MAX_DIFF_LINES];
     int diff_count, diff_scroll, diff_hscroll;
     char diff_title[512], diff_commit[64];
-    bool diff_staged, diff_sidebyside, diff_is_summary, diff_continuous;
+    bool diff_staged, diff_sidebyside, diff_is_summary, diff_continuous, diff_wrap;
     int  diff_sel;
     int  diff_split, diff_split_custom;
 
@@ -325,6 +327,11 @@ typedef struct {
     int  ed_sc_x, ed_sc_y, ed_sc_h, ed_sc_total, ed_sc_vis, ed_sc_drag_offset;
     int  tab_x[7];
     int  ed_tab_x[MAX_TABS+1]; /* Editor tab bar click positions */
+
+    /* Commit Bar (inline above changes) */
+    char commit_msg_buf[INPUT_MAX];
+    int  commit_msg_cursor;
+    bool commit_bar_focused;
 
     /* Context Menu */
     bool menu_active;
@@ -1198,11 +1205,11 @@ static void draw_statusbar(void){
     
     const char *hint="";
     if(G.current_view==VIEW_STATUS){
-        if(G.focus==FOCUS_CHANGES) hint="e:edit  SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme";
-        else if(G.focus==FOCUS_GRAPH) hint="e:edit  ↑/↓:move  ↵:diff  Home/End:top/bot  T:theme";
+        if(G.focus==FOCUS_CHANGES) hint="c:commit  e:edit  SPC:stage  a:all  u:unstage  d:discard  V:vi  W:wrap  T:theme";
+        else if(G.focus==FOCUS_GRAPH) hint="↑/↓:move  ↵:diff  V:vi  W:wrap  T:theme";
         else if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open  ←:back  b:close";
-        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  Ctrl+Z:undo  Ctrl+Y:redo  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  e:toggle diff";
-        else hint="↑/↓:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
+        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  Ctrl+Z:undo  V:vi  Ctrl+S:save";
+        else hint="↑/↓:scroll  s:split  W:wrap  q:back  T:theme";
     } else if(G.current_view==VIEW_LOG) hint="e:edit  ↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
@@ -1251,6 +1258,80 @@ static void fetch_commit_files(int idx){
 }
 
 /* ================================================================
+   COMMIT BAR (above changes list)
+================================================================ */
+static void draw_commit_bar(int row, int w, int sx){
+    bool focused = G.commit_bar_focused;
+    int iw = w - 2;
+
+    /* Label: 4 chars " ✍  " (label takes 4 cols: space + pencil(3bytes but 1 col) + space + space) */
+    at(row, sx+1);
+    cbg(TH->bg_header); cfg(TH->fg_staged); G.cur_bold = true;
+    ppad(" \xe2\x9c\x8d ", 3); /* " ✍ " = 3 display cols */
+    rst();
+
+    /* Layout: label=3, field, buttons=14 (7 each), right border already handled by box */
+    int field_w = iw - 3 - 14;
+    if(field_w < 4) field_w = 4;
+
+    /* Scroll the text so cursor stays visible */
+    int len = (int)strlen(G.commit_msg_buf);
+    int disp_start = 0;
+    if(G.commit_msg_cursor >= field_w)
+        disp_start = G.commit_msg_cursor - field_w + 1;
+
+    /* Draw field background first */
+    at(row, sx + 4);
+    cbg(focused ? TH->bg_tab_act : TH->bg_panel);
+    cfg(focused ? TH->fg_bright : TH->fg_dim);
+    for(int i = 0; i < field_w; i++) put_cell(row, sx + 4 + i, " ");
+
+    /* Draw visible text chars */
+    for(int i = disp_start; i < len && (i - disp_start) < field_w; i++){
+        int col = sx + 4 + (i - disp_start);
+        bool is_cursor = (focused && i == G.commit_msg_cursor);
+        if(is_cursor){
+            cbg(TH->fg_accent1); cfg(TH->bg_base); G.cur_bold = true;
+        } else {
+            cbg(focused ? TH->bg_tab_act : TH->bg_panel);
+            cfg(focused ? TH->fg_bright : TH->fg_dim);
+            G.cur_bold = false;
+        }
+        char cs[2] = {G.commit_msg_buf[i], 0};
+        put_cell(row, col, cs);
+    }
+    /* Cursor at end (past last char) */
+    if(focused && G.commit_msg_cursor >= len){
+        int col = sx + 4 + (len - disp_start);
+        if(col >= sx + 4 && col < sx + 4 + field_w){
+            cbg(TH->fg_accent1); cfg(TH->bg_base); G.cur_bold = true;
+            put_cell(row, col, " ");
+        }
+    }
+    rst();
+
+    /* Placeholder text when empty and unfocused */
+    if(!focused && len == 0){
+        at(row, sx + 4);
+        cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic = true;
+        ppad("commit message...", field_w);
+        G.cur_italic = false;
+        rst();
+    }
+
+    /* Buttons */
+    int btn_x = sx + 4 + field_w;
+    at(row, btn_x);
+    cbg(TH->fg_staged); cfg(TH->bg_base); G.cur_bold = true;
+    ppad(" Commit", 7);
+    rst();
+    at(row, btn_x + 7);
+    cbg(TH->bg_panel); cfg(TH->fg_accent2); G.cur_bold = true;
+    ppad(" Amend ", 7);
+    rst();
+}
+
+/* ================================================================
    CHANGES PANE
 ================================================================ */
 static void draw_changes(int top,int h){
@@ -1266,6 +1347,18 @@ static void draw_changes(int top,int h){
     for(int i=0;i<G.file_count;i++) G.files[i].staged?staged_n++:unstaged_n++;
 
     int row=top+1, lim=top+h-1, iw=w-2;
+
+    /* ── Commit Bar ── */
+    if(row < lim){
+        draw_commit_bar(row, w, sx);
+        row++;
+    }
+    /* separator */
+    if(row < lim){
+        at(row, sx+1); cbg(TH->bg_panel); cfg(TH->fg_dim);
+        for(int i=0; i<iw; i++) put_cell(row, sx+1+i, "─");
+        rst(); row++;
+    }
 
     /* ── Staged section ── */
     if(row<lim){
@@ -1493,45 +1586,119 @@ static void draw_diff(int top,int rx,int rw,int h){
     }
 
     int di=G.diff_scroll;
+
     if(!ssb){
-        /* Unified */
-        int code_w = rw - lnum_w - 6;
+        /* Unified – VSCode style: colored ▌ gutter, text wrap support */
+        int gutter_w = 1;
+        int code_w = rw - lnum_w - 5 - gutter_w - 3;
         if(code_w < 8) code_w = 8;
-        for(;di<G.diff_count&&row<lim;di++,row++){
+        for(;di<G.diff_count&&row<lim;){
             DiffLine *dl=&G.diff_lines[di];
-            at(row,rx+1);
+            const char *text = (dl->type == 2) ? dl->old_line : dl->new_line;
+            int text_len = (int)strlen(text);
+            int nrows = 1;
+            if(G.diff_wrap && code_w > 0 && text_len > code_w && dl->type <= 2){
+                nrows = (text_len + code_w - 1) / code_w;
+                if(nrows > 20) nrows = 20;
+            }
+            if(row + nrows > lim) nrows = lim - row;
+            if(nrows < 1) nrows = 1;
+
             char lno[16];
-            switch(dl->type){
-            case 0: /* Context */
-                cbg(TH->bg_base);cfg(TH->fg_linenum);snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);ppad_ext(lno,lnum_w+1,di,rx);
-                cfg(TH->fg_dim); ppad_ext("│", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->old_line,code_w,di,rx); break;
-            case 1: /* Added */
-                cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad_ext(lno,lnum_w+1,di,rx);
-                cfg(TH->fg_ok); ppad_ext("+", 1, di, rx); cfg(TH->fg_diff_add);G.cur_bold=true;ppad_ext(dl->new_line,code_w-1,di,rx);break;
-            case 2: /* Deleted */
-                cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad_ext(lno,lnum_w+1,di,rx);
-                cfg(TH->fg_err); ppad_ext("-", 1, di, rx); cfg(TH->fg_diff_del);G.cur_bold=true;ppad_ext(dl->old_line,code_w-1,di,rx);break;
-            case 3: /* Hunk header */
-                cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);G.cur_bold=true;
-                char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
-                if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
-                snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
-                ppad_ext(hsub, rw-2, di, rx); break;
-            case 4: /* File header */
-                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line,rw-2,di,rx);break;
-            case 5: /* Commit summary file list item */ {
-                bool sel = (G.diff_is_summary && G.diff_sel == di && act);
-                if(sel) { cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true; }
-                else { cbg(TH->bg_base); cfg(TH->fg_accent1); }
-                char fbuf[LINE_MAX_LEN+4]; snprintf(fbuf, sizeof(fbuf), "  → %s", dl->new_line);
-                ppad_ext(fbuf, rw-2, di, rx); break;
+            Color bg_line = TH->bg_base;
+            Color fg_gutter = TH->fg_dim;
+            const char *gutter_char = " ";
+            bool is_add = (dl->type == 1);
+            bool is_del = (dl->type == 2);
+            if(is_add) { bg_line = TH->bg_diff_add; fg_gutter = TH->fg_ok; gutter_char = "\xe2\x96\x8c"; }
+            else if(is_del) { bg_line = TH->bg_diff_del; fg_gutter = TH->fg_err; gutter_char = "\xe2\x96\x8c"; }
+            else if(dl->type == 3) { bg_line = TH->bg_diff_hdr; fg_gutter = TH->fg_accent3; gutter_char = "\xe2\x97\x89"; }
+            else if(dl->type == 4) { bg_line = TH->bg_header; fg_gutter = TH->fg_accent2; gutter_char = "\xe2\x94\x80"; }
+
+            for(int wr = 0; wr < nrows && row < lim; wr++, row++){
+                at(row, rx+1);
+                int wrap_offset = wr * code_w;
+                int wrap_avail = text_len - wrap_offset;
+                if(wrap_avail < 0) wrap_avail = 0;
+                int wrap_this = wrap_avail < code_w ? wrap_avail : code_w;
+                char tmp[LINE_MAX_LEN+1];
+
+                switch(dl->type){
+                case 0: /* Context */
+                    cbg(TH->bg_base); cfg(TH->fg_dim);
+                    put_cell(row, rx+1, " ");
+                    at(row, rx+2); cfg(TH->fg_linenum);
+                    if(wr==0){ snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad_ext(lno,lnum_w+1,di,rx); }
+                    else { for(int kk=0;kk<=lnum_w;kk++) put_cell(row, rx+2+kk, " "); at(row, rx+3+lnum_w); }
+                    cfg(TH->fg_dim); ppad_ext(" ", 1, di, rx);
+                    cfg(TH->fg_diff_ctx);
+                    if(wrap_this > 0){ memcpy(tmp, text+wrap_offset, wrap_this); tmp[wrap_this]='\0'; ppad_ext(tmp, code_w, di, rx); }
+                    else ppad_ext("", code_w, di, rx);
+                    break;
+                case 1: /* Added – green ▌ gutter */
+                    cbg(bg_line);
+                    cfg(fg_gutter); G.cur_bold=true; put_cell(row, rx+1, gutter_char); G.cur_bold=false;
+                    at(row, rx+2); cfg(TH->fg_linenum);
+                    if(wr==0){ if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,""); ppad_ext(lno,lnum_w+1,di,rx); }
+                    else { for(int kk=0;kk<=lnum_w;kk++) put_cell(row, rx+2+kk, " "); at(row, rx+3+lnum_w); }
+                    cfg(fg_gutter); ppad_ext("+", 1, di, rx); cfg(TH->fg_diff_add); G.cur_bold=true;
+                    if(wrap_this > 0){ memcpy(tmp, text+wrap_offset, wrap_this); tmp[wrap_this]='\0'; ppad_ext(tmp, code_w, di, rx); }
+                    else ppad_ext("", code_w, di, rx);
+                    break;
+                case 2: /* Deleted – red ▌ gutter */
+                    cbg(bg_line);
+                    cfg(fg_gutter); G.cur_bold=true; put_cell(row, rx+1, gutter_char); G.cur_bold=false;
+                    at(row, rx+2); cfg(TH->fg_linenum);
+                    if(wr==0){ if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,""); ppad_ext(lno,lnum_w+1,di,rx); }
+                    else { for(int kk=0;kk<=lnum_w;kk++) put_cell(row, rx+2+kk, " "); at(row, rx+3+lnum_w); }
+                    cfg(fg_gutter); ppad_ext("-", 1, di, rx); cfg(TH->fg_diff_del); G.cur_bold=true;
+                    if(wrap_this > 0){ memcpy(tmp, text+wrap_offset, wrap_this); tmp[wrap_this]='\0'; ppad_ext(tmp, code_w, di, rx); }
+                    else ppad_ext("", code_w, di, rx);
+                    break;
+                case 3: { /* Hunk header – blue with function context */
+                    cbg(bg_line); cfg(fg_gutter); G.cur_bold=true; put_cell(row, rx+1, gutter_char); G.cur_bold=false;
+                    at(row, rx+2); cbg(bg_line); cfg(TH->fg_accent3);
+                    char *hs2 = strstr(dl->new_line, "@@");
+                    char *he = hs2 ? strstr(hs2+2, "@@") : NULL;
+                    char range[64] = ""; char ctx2[LINE_MAX_LEN] = "";
+                    if(hs2 && he){
+                        int rlen = (int)(he - hs2 + 2); if(rlen > 63) rlen = 63;
+                        memcpy(range, hs2, rlen); range[rlen] = '\0';
+                        const char *ctxp = he + 2; while(*ctxp == ' ') ctxp++;
+                        snprintf(ctx2, sizeof(ctx2), "%s", ctxp);
+                    }
+                    char hbuf[LINE_MAX_LEN];
+                    snprintf(hbuf, sizeof(hbuf), " %s  %s", range, ctx2[0]?ctx2:"");
+                    G.cur_bold=true; ppad_ext(hbuf, rw-3, di, rx);
+                    break;
+                }
+                case 4: /* File header */
+                    cbg(bg_line); cfg(fg_gutter); G.cur_bold=true; put_cell(row, rx+1, gutter_char); G.cur_bold=false;
+                    at(row, rx+2); cbg(bg_line); cfg(TH->fg_accent2); G.cur_bold=true;
+                    ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line,rw-3,di,rx); break;
+                case 5: {
+                    bool sel = (G.diff_is_summary && G.diff_sel == di && act);
+                    cbg(TH->bg_base); cfg(TH->fg_dim); put_cell(row, rx+1, " ");
+                    at(row, rx+2);
+                    if(sel) { cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true; }
+                    else { cbg(TH->bg_base); cfg(TH->fg_accent1); }
+                    for(int kk=0;kk<lnum_w+1;kk++) put_cell(row, rx+2+kk, " ");
+                    at(row, rx+3+lnum_w);
+                    char fbuf[LINE_MAX_LEN+4]; snprintf(fbuf, sizeof(fbuf), " \xe2\x86\x92 %s", dl->new_line);
+                    ppad_ext(fbuf, rw-4-lnum_w, di, rx); break;
+                }
+                case 6:
+                    cbg(TH->bg_panel); cfg(TH->fg_dim); put_cell(row, rx+1, " ");
+                    at(row, rx+2); cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
+                    for(int kk=0;kk<lnum_w+1;kk++) put_cell(row, rx+2+kk, " ");
+                    at(row, rx+3+lnum_w);
+                    ppad_ext(dl->new_line[0] ? dl->new_line : dl->old_line, rw-4-lnum_w, di, rx);
+                    G.cur_italic=false; break;
+                default: break;
+                }
+                rst();
             }
-            case 6: /* Metadata / Info */
-                cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
-                ppad_ext(dl->new_line[0] ? dl->new_line : dl->old_line, rw-2, di, rx);
-                G.cur_italic=false; break;
-            }
-            rst();
+            di++;
         }
     } else {
         /* Side-by-side */
@@ -1543,32 +1710,36 @@ static void draw_diff(int top,int rx,int rw,int h){
                     cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);
                     char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                     if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
-                    snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
+                    snprintf(hsub, sizeof(hsub), " \xe2\x97\x89 %s", hs?hs:dl->new_line);
                     G.cur_bold=true; 
                     ppad_ext(hsub, half-1, di, rx);
-                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
+                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "\xe2\x94\x82");
                     at(row, rx+half+1); cbg(TH->bg_diff_hdr); ppad_ext("", (rw-half)-1, di, rx);
                 } else if(dl->type==4) {
                     cbg(TH->bg_header);cfg(TH->fg_accent2); G.cur_bold=true;
-                    ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line, half-1, di, rx);
-                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
+                    put_cell(row, rx+1, "\xe2\x94\x80");
+                    at(row, rx+2);
+                    ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line, half-2, di, rx);
+                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "\xe2\x94\x82");
                     at(row, rx+half+1); cbg(TH->bg_header); ppad_ext("", (rw-half)-1, di, rx);
                 } else {
                     cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
                     ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line, half-1, di, rx);
-                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
+                    at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "\xe2\x94\x82");
                     at(row, rx+half+1); cbg(TH->bg_panel); ppad_ext("", (rw-half)-1, di, rx);
                     G.cur_italic=false;
                 }
                 rst(); di++; row++; continue;
             }
             if(dl->type==0){
-                at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
+                at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_dim); put_cell(row, rx+1, " ");
+                at(row,rx+2); cfg(TH->fg_linenum);
                 char lno[16]; snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad_ext(lno, lnum_w+1, di, rx);
-                cfg(TH->fg_dim); ppad_ext("│", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->old_line,code_w_left, di, rx);
-                at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
+                cfg(TH->fg_dim); ppad_ext("\xe2\x94\x82", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->old_line,code_w_left, di, rx);
+                at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_dim); put_cell(row, rx+half+1, " ");
+                at(row,rx+half+2); cfg(TH->fg_linenum);
                 snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno); ppad_ext(lno, lnum_w+1, di, rx);
-                cfg(TH->fg_dim); ppad_ext("│", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->new_line,code_w_right, di, rx);
+                cfg(TH->fg_dim); ppad_ext("\xe2\x94\x82", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->new_line,code_w_right, di, rx);
                 rst(); di++; row++; continue;
             }
             /* Handle blocks of deletions and additions */
@@ -1581,38 +1752,39 @@ static void draw_diff(int top,int rx,int rw,int h){
                 for (int i = 0; i < nmax && row < lim; i++, row++) {
                     DiffLine *od = (i < ndel) ? &G.diff_lines[di + i] : NULL;
                     DiffLine *nd = (i < nadd) ? &G.diff_lines[di + ndel + i] : NULL;
-
-                    /* Left: old */
+                    /* Left: old – red ▌ gutter */
                     at(row, rx + 1);
                     if (od) {
-                        cbg(TH->bg_diff_del); cfg(TH->fg_linenum);
+                        cbg(TH->bg_diff_del); cfg(TH->fg_err); G.cur_bold=true; put_cell(row, rx+1, "\xe2\x96\x8c"); G.cur_bold=false;
+                        at(row, rx+2); cfg(TH->fg_linenum);
                         char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, od->old_lno);
                         ppad_ext(lno, lnum_w + 1, di + i, rx); cfg(TH->fg_err); ppad_ext("-", 1, di + i, rx); cfg(TH->fg_diff_del); G.cur_bold = true; ppad_ext(od->old_line, code_w_left, di + i, rx);
                     } else {
-                        cbg(TH->bg_panel); cfg(TH->fg_dim);
+                        cbg(TH->bg_panel); cfg(TH->fg_dim); put_cell(row, rx+1, " ");
+                        at(row, rx+2);
                         ppad_ext("", lnum_w + 1, -1, rx);
-                        ppad_ext("┆", 1, -1, rx);
+                        ppad_ext("\xe2\x94\x86", 1, -1, rx);
                         ppad_ext("", code_w_left, -1, rx);
                     }
                     rst();
-
-                    /* Right: new */
+                    /* Right: new – green ▌ gutter */
                     at(row, rx + half + 1);
                     if (nd) {
-                        cbg(TH->bg_diff_add); cfg(TH->fg_linenum);
+                        cbg(TH->bg_diff_add); cfg(TH->fg_ok); G.cur_bold=true; put_cell(row, rx+half+1, "\xe2\x96\x8c"); G.cur_bold=false;
+                        at(row, rx+half+2); cfg(TH->fg_linenum);
                         char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, nd->new_lno);
-                        ppad_ext(lno, lnum_w + 1, di + ndel + i, rx); cfg(TH->fg_ok); ppad_ext("+", 1, di + ndel + i, rx); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold = true; ppad_ext(nd->new_line, code_w_right, di + ndel + i, rx);
+                        ppad_ext(lno, lnum_w + 1, di + ndel + i, rx); cfg(TH->fg_ok); ppad_ext("+", 1, di + ndel + i, rx); cfg(TH->fg_diff_add); G.cur_bold = true; ppad_ext(nd->new_line, code_w_right, di + ndel + i, rx);
                     } else {
-                        cbg(TH->bg_panel); cfg(TH->fg_dim);
+                        cbg(TH->bg_panel); cfg(TH->fg_dim); put_cell(row, rx+half+1, " ");
+                        at(row, rx+half+2);
                         ppad_ext("", lnum_w + 1, -1, rx);
-                        ppad_ext("┆", 1, -1, rx);
+                        ppad_ext("\xe2\x94\x86", 1, -1, rx);
                         ppad_ext("", code_w_right, -1, rx);
                     }
                     rst();
                 }
                 di += ndel + nadd;
             } else {
-                /* Fallback for other types not explicitly handled above (though there shouldn't be any in this loop section) */
                 di++;
             }
         }
@@ -2232,32 +2404,44 @@ static void draw_browser(int top, int h){
 }
 
 static Color get_token_color(const char *tok, bool is_comment, const char *ext){
-    if(is_comment) return TH->fg_accent3;
+    if(is_comment) return TH->fg_accent3; /* green-gray comments like VSCode */
     
     static const char *c_kw[] = {
         "auto", "break", "case", "char", "const", "continue", "default", "do",
         "double", "else", "enum", "extern", "float", "for", "goto", "if",
         "int", "long", "register", "return", "short", "signed", "sizeof", "static",
         "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
-        "bool", "inline", "restrict", "NULL", "true", "false", "size_t", "uint8_t",
-        "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t",
-        "uintptr_t", "intptr_t", "ssize_t", "off_t", "time_t", "FILE", "std", "string",
-        "vector", "map", "set", "unordered_map", "unordered_set", "class", "public",
-        "private", "protected", "template", "typename", "using", "namespace", "virtual",
-        "override", "final", "constexpr", "noexcept", "explicit", "mutable", "friend"
+        "bool", "inline", "restrict", "NULL", "true", "false",
+        /* C++ */
+        "class", "public", "private", "protected", "template", "typename", "using",
+        "namespace", "virtual", "override", "final", "constexpr", "noexcept",
+        "explicit", "mutable", "friend", "new", "delete", "this", "operator",
+        "throw", "try", "catch", "static_cast", "dynamic_cast", "reinterpret_cast",
+        "nullptr", "decltype", "auto", "export", "import", "module"
     };
     static const char *js_kw[] = {
         "break", "case", "catch", "class", "const", "continue", "debugger", "default",
         "delete", "do", "else", "export", "extends", "finally", "for", "function",
         "if", "import", "in", "instanceof", "new", "return", "super", "switch",
         "this", "throw", "try", "typeof", "var", "void", "while", "with", "yield",
-        "let", "static", "enum", "await", "async", "true", "false", "null", "undefined"
+        "let", "static", "enum", "await", "async", "true", "false", "null", "undefined",
+        "from", "of"
     };
     static const char *py_kw[] = {
         "False", "None", "True", "and", "as", "assert", "async", "await", "break",
         "class", "continue", "def", "del", "elif", "else", "except", "finally",
         "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
-        "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"
+        "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+        "self", "cls", "print", "len", "range", "type", "str", "int", "list", "dict",
+        "tuple", "set", "bool", "float", "super", "object"
+    };
+    /* Built-in types / stdint etc - teal in VSCode */
+    static const char *c_types[] = {
+        "size_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uintptr_t", "intptr_t", "ssize_t", "off_t", "time_t",
+        "FILE", "DIR", "pid_t", "uid_t", "gid_t", "mode_t", "dev_t",
+        "ptrdiff_t", "wchar_t", "wint_t", "va_list"
     };
 
     const char **kw = c_kw;
@@ -2265,21 +2449,40 @@ static Color get_token_color(const char *tok, bool is_comment, const char *ext){
     
     if(ext){
         if(strcmp(ext, ".py") == 0) { kw = py_kw; kw_count = sizeof(py_kw)/sizeof(py_kw[0]); }
-        else if(strcmp(ext, ".js") == 0 || strcmp(ext, ".ts") == 0) { kw = js_kw; kw_count = sizeof(js_kw)/sizeof(js_kw[0]); }
-        else if(strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0 || strcmp(ext, ".h") == 0) { kw = c_kw; kw_count = sizeof(c_kw)/sizeof(c_kw[0]); }
+        else if(strcmp(ext, ".js") == 0 || strcmp(ext, ".ts") == 0 ||
+                strcmp(ext, ".jsx") == 0 || strcmp(ext, ".tsx") == 0) {
+            kw = js_kw; kw_count = sizeof(js_kw)/sizeof(js_kw[0]);
+        }
     }
 
-    if(tok[0] == '\'' || tok[0] == '"') return TH->fg_unstaged;
-    if(isdigit((unsigned char)tok[0])) return TH->fg_accent2;
+    /* Preprocessor directives - blue accent like VSCode */
     if(tok[0] == '#') return TH->fg_accent1;
 
-    for(int i=0; i<kw_count; i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
-    
-    /* Check for types (simple heuristic) */
-    if(ext && (strcmp(ext, ".c")==0 || strcmp(ext, ".h")==0 || strcmp(ext, ".cpp")==0)){
-        if(strstr(tok, "_t") || (isupper(tok[0]) && strlen(tok) > 2)) return TH->fg_staged;
+    /* String literals - orange/brown like VSCode */
+    if(tok[0] == '\'' || tok[0] == '"') return TH->fg_unstaged;
+
+    /* Numbers - light green/teal like VSCode */
+    if(isdigit((unsigned char)tok[0]) ||
+       (tok[0]=='0' && (tok[1]=='x'||tok[1]=='X'||tok[1]=='b'||tok[1]=='B'))) {
+        return TH->fg_accent2;
     }
 
+    /* Keywords - blue like VSCode */
+    for(int i=0; i<kw_count; i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
+    
+    /* C/C++ built-in types - teal like VSCode */
+    if(ext && (strcmp(ext, ".c")==0 || strcmp(ext, ".h")==0 ||
+               strcmp(ext, ".cpp")==0 || strcmp(ext, ".cc")==0 || strcmp(ext, ".hpp")==0)){
+        int tc = sizeof(c_types)/sizeof(c_types[0]);
+        for(int i=0; i<tc; i++) if(strcmp(tok, c_types[i]) == 0) return TH->fg_staged;
+        /* User-defined types: PascalCase or ALL_CAPS or ends with _t */
+        size_t tlen = strlen(tok);
+        if(tlen >= 2 && strstr(tok, "_t")) return TH->fg_staged;
+        if(tlen >= 2 && isupper((unsigned char)tok[0]) && islower((unsigned char)tok[1])) return TH->fg_staged;
+    }
+
+    /* Function-like identifiers: followed by '(' → yellow in VSCode */
+    /* We can't look ahead easily without context, so just return normal */
     return TH->fg_normal;
 }
 
@@ -2894,6 +3097,56 @@ static void action_drop_stash(void){
     if(r==0){OK("Dropped stash@{%d}",G.stashes[G.stash_sel].index);load_stash();}else ERR("Drop failed");
 }
 
+/* Open current file/path in $VISUAL/$EDITOR/vi */
+static void action_open_in_editor_extern(const char *path){
+    if(!path || !path[0]) return;
+    const char *ed = getenv("VISUAL");
+    if(!ed || !ed[0]) ed = getenv("SELECTED_EDITOR");
+    if(!ed || !ed[0]) ed = getenv("EDITOR");
+    if(!ed || !ed[0]) ed = "vi";
+    /* Restore terminal, exec editor, then re-init */
+    printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
+    fflush(stdout);
+    term_restore();
+    char cmd[1024];
+    if(G.focus == FOCUS_EDITOR && G.tab_count > 0){
+        snprintf(cmd, sizeof(cmd), "%s '%s'", ed, G.tabs[G.tab_current].path);
+    } else if(G.focus == FOCUS_CHANGES && G.file_count > 0){
+        snprintf(cmd, sizeof(cmd), "%s '%s'", ed, G.files[G.file_sel].path);
+    } else if(path){
+        snprintf(cmd, sizeof(cmd), "%s '%s'", ed, path);
+    } else {
+        snprintf(cmd, sizeof(cmd), "%s", ed);
+    }
+    system(cmd);
+    /* Re-init terminal */
+    term_raw();
+    printf(T_ALT T_HIDE T_MOUSE_ON T_CLEAR);
+    fflush(stdout);
+    get_winsize();
+    memset(G.front.cells, 0, G.front.w * G.front.h * sizeof(Cell));
+    reload_all();
+    OK("Returned from %s", ed);
+}
+
+/* Commit bar: perform inline commit */
+static void do_commit_bar(void){
+    if(!G.commit_msg_buf[0]){ ERR("Empty commit message"); return; }
+    int s=0; for(int i=0;i<G.file_count;i++) if(G.files[i].staged) s++;
+    if(!s){ ERR("Nothing staged"); return; }
+    do_commit(G.commit_msg_buf);
+    G.commit_msg_buf[0] = '\0';
+    G.commit_msg_cursor = 0;
+    G.commit_bar_focused = false;
+}
+
+static void do_amend_bar(void){
+    do_amend(G.commit_msg_buf);
+    G.commit_msg_buf[0] = '\0';
+    G.commit_msg_cursor = 0;
+    G.commit_bar_focused = false;
+}
+
 /* ================================================================
    SELECTION HELPER (Vi-count aware)
 ================================================================ */
@@ -3166,6 +3419,12 @@ static void handle_mouse(MouseEvt m){
         G.dragging_h_log=false; G.dragging_ed_sc=false;
     }
 
+    /* Clear commit bar focus on any click that isn't on its row */
+    if(cl && G.commit_bar_focused){
+        int commit_bar_row = 2 + 1; /* ct=2, box top=1, then commit bar */
+        if(m.row != commit_bar_row) G.commit_bar_focused = false;
+    }
+
     if(G.menu_active){
         /* ... */
         if(cl){
@@ -3402,11 +3661,31 @@ static void handle_mouse(MouseEvt m){
                 return;
             }
             if(in_top){
+                /* Check commit bar clicks (first visible row) */
+                int commit_bar_row = ct + 1;
+                if(m.row == commit_bar_row && cl){
+                    int sx2 = G.sidebar_w + 1;
+                    int iw2 = G.lw - 2;
+                    int field_w2 = iw2 - 3 - 12;
+                    int btn_x2 = sx2 + 4 + field_w2;
+                    if(m.col >= btn_x2 && m.col < btn_x2 + 7){
+                        G.commit_bar_focused = false;
+                        do_commit_bar();
+                    } else if(m.col >= btn_x2 + 7 && m.col < btn_x2 + 14){
+                        G.commit_bar_focused = false;
+                        do_amend_bar();
+                    } else {
+                        G.commit_bar_focused = true;
+                        G.focus = FOCUS_CHANGES;
+                    }
+                    return;
+                }
                 if(cl)G.focus=FOCUS_CHANGES;
                 if(su)G.file_sel=imax(0,G.file_sel-1);
                 if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+1);
                 if(cl){
-                    int row=m.row-(ct+1);
+                    /* +1 box top, +1 commit bar, +1 separator = offset 3 before file rows */
+                    int row=m.row-(ct+3);
                     int vis=0;
                     for(int i=0;i<G.file_count;i++){
                         if(G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
@@ -3760,6 +4039,45 @@ static void handle_key(Key k){
     if(G.focus==FOCUS_CLI){handle_cli_key(k);return;}
     if(k.type==KEY_CHAR && k.ch==':'){G.focus=FOCUS_CLI; return;}
 
+    /* Commit bar input handling */
+    if(G.commit_bar_focused){
+        /* TAB leaves the commit bar */
+        if(k.type == KEY_TAB || k.type == KEY_SHIFT_TAB){
+            G.commit_bar_focused = false;
+            /* fall through to normal Tab handling below */
+        } else {
+        int len = (int)strlen(G.commit_msg_buf);
+        switch(k.type){
+        case KEY_ENTER: do_commit_bar(); return;
+        case KEY_ESC: G.commit_bar_focused = false; return;
+        case KEY_BACKSPACE:
+            if(G.commit_msg_cursor > 0){
+                memmove(&G.commit_msg_buf[G.commit_msg_cursor-1], &G.commit_msg_buf[G.commit_msg_cursor], len-G.commit_msg_cursor+1);
+                G.commit_msg_cursor--;
+            }
+            return;
+        case KEY_DEL:
+            if(G.commit_msg_cursor < len)
+                memmove(&G.commit_msg_buf[G.commit_msg_cursor], &G.commit_msg_buf[G.commit_msg_cursor+1], len-G.commit_msg_cursor);
+            return;
+        case KEY_LEFT:  if(G.commit_msg_cursor > 0) G.commit_msg_cursor--; return;
+        case KEY_RIGHT: if(G.commit_msg_cursor < len) G.commit_msg_cursor++; return;
+        case KEY_HOME: case KEY_CTRL_A: G.commit_msg_cursor = 0; return;
+        case KEY_END:  G.commit_msg_cursor = len; return;
+        case KEY_CTRL_U: G.commit_msg_buf[0] = '\0'; G.commit_msg_cursor = 0; return;
+        case KEY_F4: /* Amend shortcut */ do_amend_bar(); return;
+        case KEY_CHAR:
+            if(len+1 < INPUT_MAX){
+                memmove(&G.commit_msg_buf[G.commit_msg_cursor+1], &G.commit_msg_buf[G.commit_msg_cursor], len-G.commit_msg_cursor+1);
+                G.commit_msg_buf[G.commit_msg_cursor++] = k.ch;
+            }
+            return;
+        default: break;
+        }
+        return;
+        } /* end else (not tab) */
+    }
+
     /* Focus-specific handling first (to allow typing 'e', 'b' etc in editor) */
     if(G.focus == FOCUS_EDITOR && k.type != KEY_TAB && k.type != KEY_SHIFT_TAB){
         switch(k.type){
@@ -3796,14 +4114,17 @@ static void handle_key(Key k){
             G.ed_sel_end_y = CUR_ED.cur_y; G.ed_sel_end_x = CUR_ED.cur_x;
             break;
         case KEY_ENTER:
-            if(G.ed_selecting) editor_delete_selection();
-            editor_newline(); break;
+            if(G.ed_selecting){ editor_delete_selection(); }
+            else { editor_newline(); }
+            break;
         case KEY_BACKSPACE:
-            if(G.ed_selecting) editor_delete_selection();
-            else editor_backspace(); break;
+            if(G.ed_selecting){ editor_delete_selection(); }
+            else { editor_backspace(); }
+            break;
         case KEY_DEL:
-            if(G.ed_selecting) editor_delete_selection();
-            else editor_delete_forward(); break;
+            if(G.ed_selecting){ editor_delete_selection(); }
+            else { editor_delete_forward(); }
+            break;
         case KEY_CTRL_A:
             if(CUR_ED.line_count > 0){
                 G.ed_selecting = true;
@@ -3880,7 +4201,9 @@ static void handle_key(Key k){
             if(G.focus==FOCUS_DIFF&&G.current_view==VIEW_STATUS){G.focus=FOCUS_CHANGES;return;}
             G.running=false;return;
         case 'R':reload_all();return;
-        case 'c':action_commit();return;
+        case 'c':
+            G.commit_bar_focused = true;
+            return;
         case 'A':action_amend();return;
         case 'P':action_push();return;
         case 'f':action_pull();return;
@@ -3920,6 +4243,18 @@ static void handle_key(Key k){
             }
             return;
         case 'T':G.theme_idx=(G.theme_idx+1)%NTHEMES;OK("Theme: %s",TH->name);return;
+        case 'V': {
+            /* Open in $VISUAL/$EDITOR/vi */
+            const char *path = NULL;
+            if(G.focus == FOCUS_EDITOR && G.tab_count > 0) path = G.tabs[G.tab_current].path;
+            else if(G.focus == FOCUS_CHANGES && G.file_count > 0) path = G.files[G.file_sel].path;
+            action_open_in_editor_extern(path ? path : "");
+            return;
+        }
+        case 'W':
+            G.diff_wrap = !G.diff_wrap;
+            OK("Diff wrap: %s", G.diff_wrap ? "ON" : "OFF");
+            return;
         case 'H':G.diff_continuous=!G.diff_continuous;
                  if (G.current_view == VIEW_STATUS && G.focus == FOCUS_CHANGES) update_diff();
                  else if (G.current_view == VIEW_STATUS && G.focus == FOCUS_GRAPH) {
@@ -4371,7 +4706,8 @@ int main(int argc, char **argv){
     G.clipboard=NULL;
     G.col_hash_w = 9; G.col_author_w = 14; G.col_date_w = 13;
     G.editor_active=false; G.browser_active=false;
-    G.diff_sidebyside=true; G.diff_continuous=false;
+    G.diff_sidebyside=true; G.diff_continuous=false; G.diff_wrap=false;
+    G.commit_msg_buf[0] = '\0'; G.commit_msg_cursor = 0; G.commit_bar_focused = false;
 
     signal(SIGWINCH,sig_winch);
     signal(SIGINT, sig_int);
