@@ -33,11 +33,15 @@ void draw_browser(int top, int h) {
 	box_top(top, sx, w, "Files", act, NULL);
 	box_sides(top, sx, w, h, act);
 	box_fill(top, sx, w, h, TH->bg_panel);
-	int row = top + 1, lim = top + h - 1;
-	if (g_app_state.browser_sel < g_app_state.browser_scroll)
-		g_app_state.browser_scroll = g_app_state.browser_sel;
-	if (g_app_state.browser_sel >= g_app_state.browser_scroll + (lim - row))
-		g_app_state.browser_scroll = g_app_state.browser_sel - (lim - row) + 1;
+	int row = top + 1, lim = top + h - 1, vis = lim - row;
+	if (g_app_state.needs_sync) {
+		if (g_app_state.browser_sel < g_app_state.browser_scroll)
+			g_app_state.browser_scroll = g_app_state.browser_sel;
+		if (g_app_state.browser_sel >= g_app_state.browser_scroll + vis)
+			g_app_state.browser_scroll = g_app_state.browser_sel - vis + 1;
+	}
+	int maxsc = imax(0, g_app_state.browser_count - vis);
+	g_app_state.browser_scroll = iclamp(g_app_state.browser_scroll, 0, maxsc);
 
 	for (int i = g_app_state.browser_scroll; i < g_app_state.browser_count && row < lim;
 		 i++, row++) {
@@ -124,13 +128,17 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 	}
 
 	int row = top + 2, lim = top + h - 1, vis = lim - row;
-	if (ed->cursor_row < ed->scroll_row) ed->scroll_row = ed->cursor_row;
-	if (ed->cursor_row >= ed->scroll_row + vis) ed->scroll_row = ed->cursor_row - vis + 1;
+	if (ed->needs_sync) {
+		if (ed->cursor_row < ed->scroll_row) ed->scroll_row = ed->cursor_row;
+		if (ed->cursor_row >= ed->scroll_row + vis) ed->scroll_row = ed->cursor_row - vis + 1;
+
+		int vis_w = render_width - 10;
+		if (ed->cursor_col < ed->scroll_col) ed->scroll_col = ed->cursor_col;
+		if (ed->cursor_col >= ed->scroll_col + vis_w) ed->scroll_col = ed->cursor_col - vis_w + 1;
+		ed->needs_sync = false;
+	}
 
 	int vis_w = render_width - 10;
-	if (ed->cursor_col < ed->scroll_col) ed->scroll_col = ed->cursor_col;
-	if (ed->cursor_col >= ed->scroll_col + vis_w) ed->scroll_col = ed->cursor_col - vis_w + 1;
-
 	for (int i = ed->scroll_row; i < ed->line_count && row < lim - 1; i++, row++) {
 		at(row, render_x + 1);
 		cfg(TH->fg_linenum);

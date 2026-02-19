@@ -15,10 +15,14 @@ void draw_branches(int top, int h) {
 	box_bot(top + h - 1, 1, w, true);
 
 	int row = top + 1, lim = top + h - 1, vis = lim - row;
-	if (g_app_state.branch_sel < g_app_state.branch_scroll)
-		g_app_state.branch_scroll = g_app_state.branch_sel;
-	if (g_app_state.branch_sel >= g_app_state.branch_scroll + vis)
-		g_app_state.branch_scroll = g_app_state.branch_sel - vis + 1;
+	if (g_app_state.needs_sync) {
+		if (g_app_state.branch_sel < g_app_state.branch_scroll)
+			g_app_state.branch_scroll = g_app_state.branch_sel;
+		if (g_app_state.branch_sel >= g_app_state.branch_scroll + vis)
+			g_app_state.branch_scroll = g_app_state.branch_sel - vis + 1;
+	}
+	int maxsc = imax(0, g_app_state.branch_count - (vis - 1)); /* -1 for header */
+	g_app_state.branch_scroll = iclamp(g_app_state.branch_scroll, 0, maxsc);
 
 	at(row, 2);
 	cbg(TH->bg_header);

@@ -100,6 +100,7 @@ void editor_undo(Editor *ed) {
 		OK("Nothing to undo");
 		return;
 	}
+	ed->needs_sync = true;
 	if (ed->redo_top < MAX_UNDO)
 		ed->redo_stack[ed->redo_top++] =
 			(HistEntry){editor_snapshot_text(ed), ed->cursor_row, ed->cursor_col};
@@ -115,6 +116,7 @@ void editor_redo(Editor *ed) {
 		OK("Nothing to redo");
 		return;
 	}
+	ed->needs_sync = true;
 	if (ed->undo_top < MAX_UNDO)
 		ed->undo_stack[ed->undo_top++] =
 			(HistEntry){editor_snapshot_text(ed), ed->cursor_row, ed->cursor_col};
@@ -132,6 +134,7 @@ void editor_load(const char *path) {
 	for (int i = 0; i < g_app_state.tab_count; i++) {
 		if (strcmp(g_app_state.tabs[i].path, real) == 0) {
 			g_app_state.tab_current = i;
+			g_app_state.tabs[i].ed.needs_sync = true;
 			return;
 		}
 	}
@@ -142,6 +145,7 @@ void editor_load(const char *path) {
 
 	Tab *t = &g_app_state.tabs[g_app_state.tab_current];
 	editor_free(&t->ed);
+	t->ed.needs_sync = true;
 	FILE *fp = fopen(real, "r");
 	if (!fp) return;
 	snprintf(t->path, sizeof(t->path), "%s", real);
@@ -304,6 +308,7 @@ void editor_goto_line(const char *line_str) {
 	if (line_num > 0 && line_num <= CUR_ED.line_count) {
 		CUR_ED.cursor_row = line_num - 1;
 		CUR_ED.cursor_col = 0;
+		CUR_ED.needs_sync = true;
 		OK("Jumped to line %d", line_num);
 	} else
 		ERR("Invalid line number");
@@ -311,6 +316,7 @@ void editor_goto_line(const char *line_str) {
 
 void editor_find(const char *pattern) {
 	if (!pattern || !pattern[0]) return;
+	CUR_ED.needs_sync = true;
 	snprintf(g_app_state.ed_search, sizeof(g_app_state.ed_search), "%s", pattern);
 	for (int i = CUR_ED.cursor_row; i < CUR_ED.line_count; i++) {
 		char *line = CUR_ED.lines[i];
@@ -554,6 +560,7 @@ static void begin_ed_selection(void) {
 
 void handle_editor_key(Key key_event) {
 	if (key_event.type == KEY_TAB || key_event.type == KEY_SHIFT_TAB) return;
+	CUR_ED.needs_sync = true;
 	switch (key_event.type) {
 		case KEY_UP:
 			g_app_state.ed_selecting = false;
@@ -647,6 +654,9 @@ void handle_editor_key(Key key_event) {
 		case KEY_CTRL_V:
 			editor_paste();
 			break;
+		case KEY_CTRL_C:
+			if (g_app_state.ed_selecting) action_copy_editor_selection();
+			break;
 		case KEY_CTRL_X:
 			editor_cut_selection();
 			break;
@@ -685,6 +695,10 @@ void handle_editor_key(Key key_event) {
 			editor_next_tab();
 			break;
 		case KEY_CHAR:
+			if (key_event.ch == 'y' && g_app_state.ed_selecting) {
+				action_copy_editor_selection();
+				break;
+			}
 			if (key_event.ch == 'n') {
 				editor_find_next();
 				break;

@@ -91,10 +91,6 @@ void draw_changes(int top, int h) {
 	box_sides(top, sx, w, h, act);
 	box_fill(top, sx, w, h, TH->bg_panel);
 
-	int staged_n = 0, unstaged_n = 0;
-	for (int i = 0; i < g_app_state.file_count; i++)
-		g_app_state.files[i].staged ? staged_n++ : unstaged_n++;
-
 	int row = top + 1, lim = top + h - 1, iw = w - 2;
 
 	if (row < lim) {
@@ -110,20 +106,92 @@ void draw_changes(int top, int h) {
 		row++;
 	}
 
-	if (row < lim) {
-		at(row, sx + 1);
-		cbg(TH->bg_header);
-		cfg(TH->fg_staged);
-		g_app_state.cur_bold = true;
-		char hdr[64];
-		snprintf(hdr, sizeof(hdr), " ✓ Staged (%d) ", staged_n);
-		ppad(hdr, iw);
-		rst();
-		row++;
+	int vis = lim - row;
+	if (vis <= 0) {
+		box_bot(top + h - 1, sx, w, act);
+		return;
 	}
-	for (int i = 0; i < g_app_state.file_count && row < lim; i++) {
-		if (!g_app_state.files[i].staged) continue;
-		bool sel = (g_app_state.file_sel == i && act);
+
+	struct Item {
+		bool is_header;
+		int file_idx;
+		char label[64];
+	} items[MAX_FILES + 4];
+	int item_count = 0;
+
+	int staged_n = 0, unstaged_n = 0;
+	for (int i = 0; i < g_app_state.file_count; i++)
+		g_app_state.files[i].staged ? staged_n++ : unstaged_n++;
+
+	if (staged_n > 0) {
+		items[item_count].is_header = true;
+		snprintf(items[item_count].label, 64, " ✓ Staged (%d) ", staged_n);
+		items[item_count].file_idx = -1;
+		item_count++;
+		for (int i = 0; i < g_app_state.file_count; i++) {
+			if (g_app_state.files[i].staged) {
+				items[item_count].is_header = false;
+				items[item_count].file_idx = i;
+				item_count++;
+			}
+		}
+	}
+	if (unstaged_n > 0) {
+		if (staged_n > 0) {
+			items[item_count].is_header = true;
+			items[item_count].label[0] = '\0';
+			items[item_count].file_idx = -1;
+			item_count++;
+		}
+		items[item_count].is_header = true;
+		snprintf(items[item_count].label, 64, " ✗ Unstaged (%d) ", unstaged_n);
+		items[item_count].file_idx = -1;
+		item_count++;
+		for (int i = 0; i < g_app_state.file_count; i++) {
+			if (!g_app_state.files[i].staged) {
+				items[item_count].is_header = false;
+				items[item_count].file_idx = i;
+				item_count++;
+			}
+		}
+	}
+
+	if (g_app_state.needs_sync) {
+		int sel_idx = -1;
+		for (int i = 0; i < item_count; i++) {
+			if (!items[i].is_header && items[i].file_idx == g_app_state.file_sel) {
+				sel_idx = i;
+				break;
+			}
+		}
+		if (sel_idx != -1) {
+			if (sel_idx < g_app_state.file_scroll) g_app_state.file_scroll = sel_idx;
+			if (sel_idx >= g_app_state.file_scroll + vis)
+				g_app_state.file_scroll = sel_idx - vis + 1;
+		}
+	}
+	g_app_state.file_scroll = iclamp(g_app_state.file_scroll, 0, imax(0, item_count - vis));
+
+	for (int i = g_app_state.file_scroll; i < item_count && row < lim; i++, row++) {
+		if (items[i].is_header) {
+			at(row, sx + 1);
+			if (items[i].label[0]) {
+				cbg(TH->bg_header);
+				cfg(items[i].label[1] == 'v' || items[i].label[2] == 'S' ? TH->fg_staged
+																		 : TH->fg_unstaged);
+				g_app_state.cur_bold = true;
+				ppad(items[i].label, iw);
+			} else {
+				cbg(TH->bg_panel);
+				for (int k = 0; k < iw; k++) put_cell(row, sx + 1 + k, " ");
+			}
+			rst();
+			continue;
+		}
+
+		int fi = items[i].file_idx;
+		GitFile *f = &g_app_state.files[fi];
+		bool sel = (g_app_state.file_sel == fi && act);
 		at(row, sx + 1);
 		if (sel) {
 			cbg(TH->bg_sel);
@@ -132,12 +200,13 @@ void draw_changes(int top, int h) {
 			ppad(" »", 2);
 		} else {
 			cbg(TH->bg_panel);
-			cfg(TH->fg_staged);
+			cfg(f->staged ? TH->fg_staged : TH->fg_unstaged);
 			ppad("  ", 2);
 		}
 
+		Color ic_col = f->staged ? TH->fg_staged : TH->fg_unstaged;
 		const char *ic = "M";
-		switch (g_app_state.files[i].status) {
+		switch (f->status) {
 			case FS_STAGED_NEW:
 				ic = "A";
 				break;
@@ -150,66 +219,6 @@ void draw_changes(int top, int h) {
 			case FS_COPIED:
 				ic = "C";
 				break;
-			default:
-				ic = "M";
-				break;
-		}
-		ppad(ic, 1);
-		ppad(" ", 1);
-		if (sel) {
-			cfg(TH->fg_sel);
-			cbg(TH->bg_sel);
-		} else {
-			cfg(TH->fg_normal);
-			cbg(TH->bg_panel);
-		}
-		char disp[512];
-		if (g_app_state.files[i].original_path[0])
-			snprintf(disp, sizeof(disp), "%s→%s", g_app_state.files[i].original_path,
-					 g_app_state.files[i].path);
-		else
-			snprintf(disp, sizeof(disp), "%s", g_app_state.files[i].path);
-		ppad(disp, iw - 4);
-		rst();
-		row++;
-	}
-	if (row < lim) {
-		at(row, sx + 1);
-		cbg(TH->bg_panel);
-		for (int i = 0; i < iw; i++) put_cell(row, sx + 1 + i, " ");
-		rst();
-		row++;
-	}
-
-	if (row < lim) {
-		at(row, sx + 1);
-		cbg(TH->bg_header);
-		cfg(TH->fg_unstaged);
-		g_app_state.cur_bold = true;
-		char hdr[64];
-		snprintf(hdr, sizeof(hdr), " ✗ Unstaged (%d) ", unstaged_n);
-		ppad(hdr, iw);
-		rst();
-		row++;
-	}
-	for (int i = 0; i < g_app_state.file_count && row < lim; i++) {
-		if (g_app_state.files[i].staged) continue;
-		bool sel = (g_app_state.file_sel == i && act);
-		at(row, sx + 1);
-		if (sel) {
-			cbg(TH->bg_sel);
-			cfg(TH->fg_sel);
-			g_app_state.cur_bold = true;
-			ppad(" »", 2);
-		} else {
-			cbg(TH->bg_panel);
-			cfg(TH->fg_unstaged);
-			ppad("  ", 2);
-		}
-
-		Color ic_col = TH->fg_unstaged;
-		const char *ic = "M";
-		switch (g_app_state.files[i].status) {
 			case FS_UNTRACKED:
 				ic = "?";
 				ic_col = TH->fg_untracked;
@@ -235,10 +244,15 @@ void draw_changes(int top, int h) {
 			cfg(TH->fg_normal);
 			cbg(TH->bg_panel);
 		}
-		ppad(g_app_state.files[i].path, iw - 4);
+		char disp[512];
+		if (f->original_path[0])
+			snprintf(disp, sizeof(disp), "%s→%s", f->original_path, f->path);
+		else
+			snprintf(disp, sizeof(disp), "%s", f->path);
+		ppad(disp, iw - 4);
 		rst();
-		row++;
 	}
+
 	while (row < lim) {
 		at(row, sx + 1);
 		cbg(TH->bg_panel);
@@ -269,6 +283,8 @@ void draw_graph(int top, int h) {
 		g_app_state.commit_scroll = g_app_state.commit_sel;
 	if (g_app_state.commit_sel >= g_app_state.commit_scroll + vis)
 		g_app_state.commit_scroll = g_app_state.commit_sel - vis + 1;
+	int maxsc = imax(0, g_app_state.commit_count - vis);
+	g_app_state.commit_scroll = iclamp(g_app_state.commit_scroll, 0, maxsc);
 
 	g_app_state.graph_rows_count = 0;
 	for (int i = g_app_state.commit_scroll; i < g_app_state.commit_count && row < lim; i++, row++) {

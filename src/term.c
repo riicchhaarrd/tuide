@@ -50,9 +50,10 @@ void get_winsize(void) {
 
 Key read_key(void) {
 	Key k = {KEY_NONE, 0, {0, 0, 0, false, false, false}};
-	unsigned char buf[32];
-	int n = (int)read(STDIN_FILENO, buf, sizeof(buf));
+	unsigned char buf[64];
+	int n = (int)read(STDIN_FILENO, buf, sizeof(buf) - 1);
 	if (n <= 0) return k;
+	buf[n] = '\0';
 
 	if (buf[0] == 0x1b) {
 		if (n == 1) {

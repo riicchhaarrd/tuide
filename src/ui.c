@@ -119,6 +119,7 @@ void draw(void) {
 	draw_dividers();
 	draw_menu();
 
+	g_app_state.needs_sync = false;
 	draw_flush();
 }
 
@@ -222,9 +223,9 @@ void draw_statusbar(void) {
 				"W:wrap  "
 				"T:theme";
 		else if (g_app_state.focus == FOCUS_GRAPH)
-			hint = "↑/↓:move  ↵:diff  g/G:top/bot  V:vi  W:wrap  T:theme";
+			hint = "↑/↓:move  SPC/→:expand  ↵:diff  g/G:top/bot  V:vi  W:wrap  T:theme";
 		else if (g_app_state.focus == FOCUS_BROWSER)
-			hint = "↑/↓:move  ↵/→:open  ←:back  b:close";
+			hint = "↑/↓:move  ↵/→:open  ←:back  n:new  D:del  b:close";
 		else if (g_app_state.focus == FOCUS_EDITOR)
 			hint =
 				"Arrows:move  Shift+Arrows:select  n/N:find  Ctrl+F:search  Ctrl+Z:undo  "

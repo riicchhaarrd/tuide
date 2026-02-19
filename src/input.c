@@ -132,6 +132,72 @@ static void do_amend_bar(void) {
 	g_app_state.commit_bar_focused = false;
 }
 
+static void toggle_commit_expansion(void) {
+	if (g_app_state.commit_count <= 0) return;
+	GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
+	c->expanded = !c->expanded;
+	if (c->expanded) fetch_commit_files(g_app_state.commit_sel);
+}
+
+static void open_diff_summary_at(int idx) {
+	if (idx < 0 || idx >= g_app_state.diff_count) return;
+	DiffLine *dl = &g_app_state.diff_lines[idx];
+	if (dl->type != 5) return;
+
+	if (strncmp(g_app_state.diff_title, "Files:", 6) == 0) {
+		editor_load(dl->new_line);
+		g_app_state.editor_active = true;
+		g_app_state.focus = FOCUS_EDITOR;
+		return;
+	}
+
+	if (strncmp(g_app_state.diff_title, "Search:", 7) == 0) {
+		char lb[LINE_MAX_LEN];
+		snprintf(lb, sizeof(lb), "%s", dl->new_line);
+		char *c1 = strchr(lb, ':');
+		if (c1 && isdigit((unsigned char)c1[1])) {
+			*c1 = '\0';
+			int lno = atoi(c1 + 1);
+			editor_load(lb);
+			if (g_app_state.tab_count > 0) {
+				Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
+				ed->cursor_row = imax(0, lno - 1);
+				ed->cursor_col = 0;
+				ed->needs_sync = true;
+			}
+			g_app_state.editor_active = true;
+			g_app_state.focus = FOCUS_EDITOR;
+		}
+		return;
+	}
+
+	if (!g_app_state.diff_commit[0]) return;
+	char fpath[LINE_MAX_LEN];
+	snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+	const char *ctx_ = g_app_state.diff_continuous ? "-U1000" : "-U3";
+	char cmd[1024];
+	snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, g_app_state.diff_commit,
+			 fpath);
+	char *o = git_run(cmd);
+	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s",
+			 g_app_state.diff_commit, fpath);
+	g_app_state.diff_is_summary = false;
+	parse_diff(o ? o : "");
+	free(o);
+}
+
+static void show_log_commit(void) {
+	if (g_app_state.commit_count <= 0) return;
+	if (g_app_state.commit_sel < 0 || g_app_state.commit_sel >= g_app_state.commit_count) return;
+	GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
+	g_app_state.diff_staged = false;
+	g_app_state.diff_is_summary = false;
+	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s", c->hash,
+			 c->subject);
+	snprintf(g_app_state.diff_commit, sizeof(g_app_state.diff_commit), "%s", c->hash);
+	load_diff_commit(c->hash);
+}
+
 static void handle_mouse(MouseEvt m) {
 	g_app_state.last_mx = m.col;
 	g_app_state.last_my = m.row;
@@ -141,6 +207,62 @@ static void handle_mouse(MouseEvt m) {
 	bool cl = !su && !sd && !m.release && (m.btn & 3) != 3 && !motion;
 	bool right_cl = cl && (m.btn & 3) == 2;
 	int ct = 2;
+
+	if (su || sd) {
+		int delta = su ? -3 : 3;
+		if (g_app_state.current_view == VIEW_STATUS) {
+			int vx = g_app_state.sidebar_w + g_app_state.layout_width;
+			if (m.col <= vx) {
+				if (g_app_state.browser_active) {
+					g_app_state.browser_scroll = imax(0, g_app_state.browser_scroll + delta);
+				} else {
+					bool in_top = (m.row >= ct && m.row < ct + g_app_state.layout_height_changes);
+					if (in_top) {
+						g_app_state.file_scroll = imax(0, g_app_state.file_scroll + delta);
+					} else {
+						int gvis = g_app_state.layout_height_graph - 2;
+						int step = su ? -1 : 1;
+						msel(&g_app_state.commit_sel, &g_app_state.commit_scroll,
+							 g_app_state.commit_count, step, gvis, true);
+					}
+				}
+			} else {
+				if (g_app_state.editor_active && g_app_state.tab_count > 0) {
+					Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
+					ed->scroll_row = imax(0, ed->scroll_row + delta);
+				} else {
+					g_app_state.diff_scroll = imax(0, g_app_state.diff_scroll + delta);
+				}
+			}
+		} else if (g_app_state.current_view == VIEW_LOG) {
+			int log_h = (ct + g_app_state.layout_height_log);
+			if (m.row < log_h) {
+				int vis = g_app_state.layout_height_log - 2;
+				int step = su ? -1 : 1;
+				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, g_app_state.commit_count,
+					 step, vis, false);
+				show_log_commit();
+			} else {
+				if (g_app_state.editor_active && g_app_state.tab_count > 0) {
+					Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
+					ed->scroll_row = imax(0, ed->scroll_row + delta);
+				} else {
+					g_app_state.diff_scroll = imax(0, g_app_state.diff_scroll + delta);
+				}
+			}
+		} else if (g_app_state.current_view == VIEW_BRANCHES) {
+			g_app_state.branch_scroll = imax(0, g_app_state.branch_scroll + delta);
+		} else if (g_app_state.current_view == VIEW_EDITOR) {
+			int vx = g_app_state.sidebar_w + g_app_state.layout_width;
+			if (m.col <= vx) {
+				g_app_state.browser_scroll = imax(0, g_app_state.browser_scroll + delta);
+			} else if (g_app_state.tab_count > 0) {
+				Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
+				ed->scroll_row = imax(0, ed->scroll_row + delta);
+			}
+		}
+		return;
+	}
 
 	if (m.release) {
 		g_app_state.dragging_v = false;
@@ -217,7 +339,6 @@ static void handle_mouse(MouseEvt m) {
 		}
 		if (g_app_state.dragging_ed_sc && g_app_state.editor_scrollbar_height > 0 &&
 			g_app_state.tab_count > 0) {
-			/* ... simplified editor scroll drag logic ... */
 			/* Using global state CUR_ED logic */
 			Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 			int rel_y = m.row - g_app_state.editor_scrollbar_y;
@@ -237,7 +358,17 @@ static void handle_mouse(MouseEvt m) {
 			g_app_state.col_hash_w = imax(4, m.col - (2 + GRAPH_COLS));
 			return;
 		}
-		/* ... skipped some col resize logic for brevity, can restore if needed ... */
+		if (g_app_state.dragging_col_author) {
+			int prefix = 2 + GRAPH_COLS + g_app_state.col_hash_w + 1 + 21;
+			g_app_state.col_author_w = imax(4, m.col - prefix);
+			return;
+		}
+		if (g_app_state.dragging_col_date) {
+			int prefix = 2 + GRAPH_COLS + g_app_state.col_hash_w + 1 + 21 +
+						 g_app_state.col_author_w + 1;
+			g_app_state.col_date_w = imax(4, m.col - prefix);
+			return;
+		}
 		if (g_app_state.ed_selecting) {
 			Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 			g_app_state.ed_sel_end_y =
@@ -287,9 +418,11 @@ static void handle_mouse(MouseEvt m) {
 	int toggle_row =
 		(g_app_state.current_view == VIEW_LOG) ? (ct + g_app_state.layout_height_log) : ct;
 	int toggle_min_x = (g_app_state.current_view == VIEW_LOG) ? 1 : g_app_state.render_x;
+	bool editor_visible =
+		(g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR);
 
 	/* Editor tabs */
-	if (cl && g_app_state.editor_active && m.row == toggle_row + 1 && m.col > toggle_min_x) {
+	if (cl && editor_visible && m.row == toggle_row + 1 && m.col > toggle_min_x) {
 		for (int i = 0; i < g_app_state.tab_count; i++) {
 			if (m.col >= g_app_state.ed_tab_x[i] && m.col < g_app_state.ed_tab_x[i + 1]) {
 				g_app_state.tab_current = i;
@@ -301,7 +434,7 @@ static void handle_mouse(MouseEvt m) {
 
 	/* Right pane header */
 	if (cl && m.row == toggle_row && m.col > toggle_min_x) {
-		if (!g_app_state.editor_active) {
+		if (!editor_visible) {
 			g_app_state.focus = FOCUS_DIFF;
 			int unify_x = g_app_state.cols - 16;
 			int hunk_x = g_app_state.cols - 8;
@@ -357,8 +490,28 @@ static void handle_mouse(MouseEvt m) {
 				m.row >= g_app_state.editor_scrollbar_y &&
 				m.row < g_app_state.editor_scrollbar_y + g_app_state.editor_scrollbar_height) {
 				g_app_state.dragging_ed_sc = true;
-				/* ... simplified scroll drag start ... */
-				g_app_state.editor_scrollbar_drag_offset = 0; /* rough */
+				int rel_y = m.row - g_app_state.editor_scrollbar_y;
+				int bh = imax(1, (g_app_state.editor_scrollbar_visible *
+								  g_app_state.editor_scrollbar_visible) /
+									 g_app_state.editor_scrollbar_total);
+				int max_bpos = g_app_state.editor_scrollbar_height - bh;
+				int bpos = (max_bpos > 0)
+							   ? ((long long)ed->scroll_row * max_bpos) /
+									 (g_app_state.editor_scrollbar_total -
+									  g_app_state.editor_scrollbar_visible)
+							   : 0;
+
+				if (rel_y >= bpos && rel_y < bpos + bh) {
+					g_app_state.editor_scrollbar_drag_offset = rel_y - bpos;
+				} else {
+					g_app_state.editor_scrollbar_drag_offset = bh / 2;
+					int new_bpos = iclamp(rel_y - g_app_state.editor_scrollbar_drag_offset,
+										  0, max_bpos);
+					ed->scroll_row =
+						(new_bpos * (g_app_state.editor_scrollbar_total -
+									 g_app_state.editor_scrollbar_visible)) /
+						max_bpos;
+				}
 				return;
 			}
 			g_app_state.ed_selecting = true;
@@ -374,6 +527,33 @@ static void handle_mouse(MouseEvt m) {
 			g_app_state.focus = FOCUS_EDITOR;
 			return;
 		} else {
+			int sc_x = g_app_state.render_x + g_app_state.render_width - 3;
+			if (m.col >= sc_x && g_app_state.scrollbar_height > 0 &&
+				m.row >= g_app_state.scrollbar_y &&
+				m.row < g_app_state.scrollbar_y + g_app_state.scrollbar_height) {
+				g_app_state.dragging_sc = true;
+				int rel_y = m.row - g_app_state.scrollbar_y;
+				int bh = imax(1, (g_app_state.scrollbar_visible * g_app_state.scrollbar_visible) /
+									 g_app_state.scrollbar_total);
+				int max_bpos = g_app_state.scrollbar_height - bh;
+				int bpos =
+					(max_bpos > 0)
+						? ((long long)g_app_state.diff_scroll * max_bpos) /
+							  (g_app_state.scrollbar_total - g_app_state.scrollbar_visible)
+						: 0;
+				if (rel_y >= bpos && rel_y < bpos + bh) {
+					g_app_state.scrollbar_drag_offset = rel_y - bpos;
+				} else {
+					g_app_state.scrollbar_drag_offset = bh / 2;
+					/* Immediate jump */
+					int new_bpos = iclamp(rel_y - g_app_state.scrollbar_drag_offset, 0, max_bpos);
+					g_app_state.diff_scroll =
+						(new_bpos * (g_app_state.scrollbar_total - g_app_state.scrollbar_visible)) /
+						max_bpos;
+				}
+				return;
+			}
+
 			g_app_state.selecting = true;
 			g_app_state.sel_start_y = g_app_state.sel_end_y =
 				g_app_state.diff_scroll + (m.row - (dtop + 1));
@@ -403,8 +583,30 @@ static void handle_mouse(MouseEvt m) {
 			g_app_state.dragging_h = true;
 			return;
 		}
+		if (cl && g_app_state.diff_sidebyside && m.col == drx + g_app_state.diff_split) {
+			g_app_state.dragging_diff = true;
+			return;
+		}
+		if (cl && g_app_state.focus == FOCUS_GRAPH) {
+			int cur_x = 2 + GRAPH_COLS;
+			if (m.col == cur_x + g_app_state.col_hash_w) {
+				g_app_state.dragging_col_hash = true;
+				return;
+			}
+			cur_x += g_app_state.col_hash_w + 1 + 21;
+			if (m.col == cur_x + g_app_state.col_author_w) {
+				g_app_state.dragging_col_author = true;
+				return;
+			}
+			cur_x += g_app_state.col_author_w + 1;
+			if (m.col == cur_x + g_app_state.col_date_w) {
+				g_app_state.dragging_col_date = true;
+				return;
+			}
+		}
 
 		bool in_l = (m.col >= 1 && m.col <= vx);
+		bool in_r = (m.col > vx);
 		bool in_top = (m.row >= ct && m.row < ct + g_app_state.layout_height_changes);
 		bool in_bot = (m.row >= ct + g_app_state.layout_height_changes);
 
@@ -469,39 +671,163 @@ static void handle_mouse(MouseEvt m) {
 						return;
 					}
 
-					int vis = 0;
-					int row = m.row - (ct + 3);
-					for (int i = 0; i < g_app_state.file_count; i++) {
-						if (g_app_state.files[i].staged) {
-							vis++;
-							if (vis == row) {
-								g_app_state.file_sel = i;
-								break;
+					/* Linearize items to find clicked file, matching draw_changes logic */
+					struct {
+						bool is_header;
+						int file_idx;
+					} items[MAX_FILES + 4];
+					int item_count = 0;
+					int staged_n = 0, unstaged_n = 0;
+					for (int i = 0; i < g_app_state.file_count; i++)
+						g_app_state.files[i].staged ? staged_n++ : unstaged_n++;
+
+					if (staged_n > 0) {
+						items[item_count++].is_header = true;
+						for (int i = 0; i < g_app_state.file_count; i++)
+							if (g_app_state.files[i].staged) {
+								items[item_count].is_header = false;
+								items[item_count++].file_idx = i;
 							}
-						}
 					}
-					vis++;
-					vis++;
-					for (int i = 0; i < g_app_state.file_count; i++) {
-						if (!g_app_state.files[i].staged) {
-							vis++;
-							if (vis == row) {
-								g_app_state.file_sel = i;
-								break;
+					if (unstaged_n > 0) {
+						if (staged_n > 0) items[item_count++].is_header = true;
+						items[item_count++].is_header = true;
+						for (int i = 0; i < g_app_state.file_count; i++)
+							if (!g_app_state.files[i].staged) {
+								items[item_count].is_header = false;
+								items[item_count++].file_idx = i;
 							}
-						}
+					}
+
+					int click_row = m.row - (ct + 3);
+					int idx = g_app_state.file_scroll + click_row;
+					if (idx >= 0 && idx < item_count && !items[idx].is_header) {
+						g_app_state.file_sel = items[idx].file_idx;
 					}
 				}
 				update_diff();
 			} else if (in_bot) {
 				if (cl) g_app_state.focus = FOCUS_GRAPH;
 				if (cl) {
-					/* ... simplified graph selection ... */
+					int top = ct + g_app_state.layout_height_changes;
+					int rel_row = m.row - (top + 1);
+					if (rel_row >= 0 && rel_row < g_app_state.graph_rows_count) {
+						int ci = g_app_state.graph_rows[rel_row].commit_idx;
+						int fi = g_app_state.graph_rows[rel_row].file_idx;
+						if (ci >= 0 && ci < g_app_state.commit_count) {
+							int arrow_col = g_app_state.sidebar_w + 2;
+							if (m.col == arrow_col || m.col == arrow_col + 1) {
+								g_app_state.commits[ci].expanded =
+									!g_app_state.commits[ci].expanded;
+								if (g_app_state.commits[ci].expanded) fetch_commit_files(ci);
+								return;
+							}
+							g_app_state.commit_sel = ci;
+							g_app_state.graph_file_sel = fi;
+							sync_graph_preview();
+						}
+					}
+				}
+			}
+		}
+		if (in_r) {
+			if (cl) g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+			if (cl && !g_app_state.editor_active && g_app_state.diff_is_summary &&
+				m.row > dtop && m.row < g_app_state.rows - 1) {
+				int t = g_app_state.diff_scroll + (m.row - (dtop + 1));
+				if (t >= 0 && t < g_app_state.diff_count) {
+					g_app_state.diff_sel = t;
+					open_diff_summary_at(t);
 				}
 			}
 		}
 	}
-	/* ... other views ... */
+	if (cl && g_app_state.current_view == VIEW_LOG) {
+		if (m.row == ct + g_app_state.layout_height_log - 1) {
+			g_app_state.dragging_h_log = true;
+			return;
+		}
+		if (g_app_state.diff_sidebyside && m.col == drx + g_app_state.diff_split) {
+			g_app_state.dragging_diff = true;
+			return;
+		}
+		int start_y = ct + 2;
+		if (m.row >= start_y && m.row < start_y + g_app_state.layout_height_log - 2) {
+			int idx = g_app_state.commit_scroll + (m.row - start_y);
+			if (idx >= 0 && idx < g_app_state.commit_count) {
+				g_app_state.commit_sel = idx;
+				show_log_commit();
+			}
+		} else if (m.row == ct + 1) {
+			int x = 2 + GRAPH_COLS;
+			if (m.col == x + g_app_state.col_hash_w) g_app_state.dragging_col_hash = true;
+			x += g_app_state.col_hash_w + 1 + 21;
+			if (m.col == x + g_app_state.col_author_w) g_app_state.dragging_col_author = true;
+			x += g_app_state.col_author_w + 1;
+			if (m.col == x + g_app_state.col_date_w) g_app_state.dragging_col_date = true;
+		} else if (!g_app_state.editor_active && g_app_state.diff_is_summary &&
+				   m.row > ct + g_app_state.layout_height_log && m.row < g_app_state.rows - 1) {
+			int t = g_app_state.diff_scroll +
+					(m.row - (ct + g_app_state.layout_height_log + 1));
+			if (t >= 0 && t < g_app_state.diff_count) {
+				g_app_state.diff_sel = t;
+				g_app_state.focus = FOCUS_DIFF;
+				open_diff_summary_at(t);
+			}
+		}
+	} else if (cl && g_app_state.current_view == VIEW_BRANCHES) {
+		int start_y = ct + 2;
+		if (m.row >= start_y && m.row < g_app_state.rows - 1) {
+			int idx = g_app_state.branch_scroll + (m.row - start_y);
+			if (idx >= 0 && idx < g_app_state.branch_count) {
+				g_app_state.branch_sel = idx;
+			}
+		}
+	} else if (cl && g_app_state.current_view == VIEW_STASH) {
+		int start_y = ct + 1;
+		if (m.row >= start_y && m.row < g_app_state.rows - 1) {
+			int idx = m.row - start_y;
+			if (idx >= 0 && idx < g_app_state.stash_count) {
+				g_app_state.stash_sel = idx;
+			}
+		}
+	} else if (cl && g_app_state.current_view == VIEW_EDITOR) {
+		layout();
+		int vx = g_app_state.sidebar_w + g_app_state.layout_width;
+		if (m.col <= vx) {
+			g_app_state.focus = FOCUS_BROWSER;
+			int t = g_app_state.browser_scroll + (m.row - (ct + 1));
+			if (t >= 0 && t < g_app_state.browser_count) {
+				g_app_state.browser_sel = t;
+				BrowserFile *f = &g_app_state.browser_files[t];
+				if (f->is_dir) {
+					char next[1024];
+					snprintf(next, sizeof(next), "%s/%s", g_app_state.browser_path, f->path);
+					load_browser(next);
+					g_app_state.browser_sel = 0;
+					g_app_state.browser_scroll = 0;
+				} else {
+					char full[1024];
+					snprintf(full, sizeof(full), "%s/%s", g_app_state.browser_path, f->path);
+					editor_load(full);
+					g_app_state.focus = FOCUS_EDITOR;
+				}
+			}
+		} else {
+			g_app_state.focus = FOCUS_EDITOR;
+			if (g_app_state.tab_count > 0) {
+				Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
+				int ty = ed->scroll_row + (m.row - (ct + 2));
+				if (ty >= 0 && ty < ed->line_count) {
+					ed->cursor_row = ty;
+					ed->cursor_col =
+						iclamp(m.col - (g_app_state.render_x + 7) + ed->scroll_col, 0,
+							   (int)strlen(ed->lines[ty]));
+					ed->needs_sync = true;
+				}
+			}
+		}
+	}
 }
 
 void handle_key(Key k) {
@@ -509,6 +835,7 @@ void handle_key(Key k) {
 		handle_mouse(k.mouse);
 		return;
 	}
+	g_app_state.needs_sync = true;
 	if (g_app_state.menu_active) {
 		g_app_state.menu_active = false;
 		return;
@@ -546,6 +873,33 @@ void handle_key(Key k) {
 						g_app_state.commit_msg_cursor--;
 					}
 					return;
+				case KEY_DEL:
+					if (g_app_state.commit_msg_cursor < len) {
+						memmove(&g_app_state.commit_msg_buf[g_app_state.commit_msg_cursor],
+								&g_app_state.commit_msg_buf[g_app_state.commit_msg_cursor + 1],
+								len - g_app_state.commit_msg_cursor);
+					}
+					return;
+				case KEY_LEFT:
+					if (g_app_state.commit_msg_cursor > 0) g_app_state.commit_msg_cursor--;
+					return;
+				case KEY_RIGHT:
+					if (g_app_state.commit_msg_cursor < len) g_app_state.commit_msg_cursor++;
+					return;
+				case KEY_HOME:
+				case KEY_CTRL_A:
+					g_app_state.commit_msg_cursor = 0;
+					return;
+				case KEY_END:
+					g_app_state.commit_msg_cursor = len;
+					return;
+				case KEY_CTRL_U:
+					g_app_state.commit_msg_buf[0] = '\0';
+					g_app_state.commit_msg_cursor = 0;
+					return;
+				case KEY_F4:
+					do_amend_bar();
+					return;
 				case KEY_CHAR:
 					if (len + 1 < INPUT_MAX) {
 						memmove(&g_app_state.commit_msg_buf[g_app_state.commit_msg_cursor + 1],
@@ -559,6 +913,77 @@ void handle_key(Key k) {
 			}
 			return;
 		}
+	}
+
+	if (k.type == KEY_CTRL_F) {
+		if (g_app_state.focus == FOCUS_EDITOR)
+			prompt_start("Find:", editor_find, false);
+		else
+			action_pull();
+		return;
+	}
+	if (k.type == KEY_CTRL_G) {
+		if (g_app_state.focus == FOCUS_EDITOR) prompt_start("Go to line:", editor_goto_line, false);
+		return;
+	}
+	if (k.type == KEY_CTRL_S) {
+		if (g_app_state.focus == FOCUS_EDITOR)
+			editor_save();
+		else if (g_app_state.current_view == VIEW_STATUS && g_app_state.focus == FOCUS_CHANGES)
+			action_stage();
+		return;
+	}
+
+	if (g_app_state.focus == FOCUS_BROWSER) {
+		int cnt = g_app_state.browser_count;
+		int bvis = g_app_state.rows - 6;
+		switch (k.type) {
+			case KEY_UP:
+				msel(&g_app_state.browser_sel, &g_app_state.browser_scroll, cnt, -1, bvis, false);
+				break;
+			case KEY_DOWN:
+				msel(&g_app_state.browser_sel, &g_app_state.browser_scroll, cnt, 1, bvis, false);
+				break;
+			case KEY_LEFT:
+				load_browser("..");
+				g_app_state.browser_sel = 0;
+				break;
+			case KEY_RIGHT:
+			case KEY_ENTER:
+				if (cnt > 0) {
+					BrowserFile *f = &g_app_state.browser_files[g_app_state.browser_sel];
+					if (f->is_dir) {
+						char next[1024];
+						snprintf(next, sizeof(next), "%s/%s", g_app_state.browser_path,
+								 f->path);
+						load_browser(next);
+						g_app_state.browser_sel = 0;
+					} else {
+						char full[1024];
+						snprintf(full, sizeof(full), "%s/%s", g_app_state.browser_path,
+								 f->path);
+						editor_load(full);
+						g_app_state.editor_active = true;
+						g_app_state.focus = FOCUS_EDITOR;
+					}
+				}
+				break;
+			case KEY_CHAR:
+				if (k.ch == 'n') menu_new_file();
+				if (k.ch == 'D') menu_delete_file();
+				if (k.ch == 'b') {
+					g_app_state.browser_active = false;
+					g_app_state.focus = FOCUS_CHANGES;
+				}
+				break;
+			case KEY_ESC:
+			case KEY_TAB:
+				g_app_state.focus = FOCUS_CHANGES;
+				break;
+			default:
+				break;
+		}
+		if (!(k.type == KEY_CHAR && isdigit((unsigned char)k.ch))) return;
 	}
 
 	if (g_app_state.focus == FOCUS_EDITOR && k.type != KEY_TAB && k.type != KEY_SHIFT_TAB) {
@@ -610,8 +1035,14 @@ void handle_key(Key k) {
 			case 'f':
 				action_pull();
 				return;
+			case 's':
+				action_stash();
+				return;
 			case 'y':
-				if (g_app_state.selecting) action_copy_selection();
+				if (g_app_state.ed_selecting)
+					action_copy_editor_selection();
+				else if (g_app_state.selecting)
+					action_copy_selection();
 				return;
 			case 'e':
 				/* Toggle editor */
@@ -626,8 +1057,40 @@ void handle_key(Key k) {
 							g_app_state.editor_active = true;
 							g_app_state.focus = FOCUS_EDITOR;
 						}
+					} else if (g_app_state.focus == FOCUS_GRAPH && g_app_state.commit_count > 0) {
+						GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
+						if (g_app_state.graph_file_sel > 0) {
+							editor_load(c->files[g_app_state.graph_file_sel]);
+							g_app_state.editor_active = true;
+							g_app_state.focus = FOCUS_EDITOR;
+						} else {
+							g_app_state.editor_active = !g_app_state.editor_active;
+							if (!g_app_state.editor_active) {
+								g_app_state.focus = FOCUS_CHANGES;
+								update_diff();
+							}
+						}
 					} else {
 						g_app_state.editor_active = !g_app_state.editor_active;
+						if (!g_app_state.editor_active) {
+							g_app_state.focus = FOCUS_CHANGES;
+							update_diff();
+						}
+					}
+				} else if (g_app_state.current_view == VIEW_LOG) {
+					if (!g_app_state.editor_active && g_app_state.commit_count > 0) {
+						GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
+						if (g_app_state.graph_file_sel > 0)
+							editor_load(c->files[g_app_state.graph_file_sel]);
+						else if (c->hash[0]) {
+							g_app_state.editor_active = true;
+							g_app_state.focus = FOCUS_EDITOR;
+						}
+					}
+					g_app_state.editor_active = !g_app_state.editor_active;
+					if (!g_app_state.editor_active) {
+						g_app_state.focus = FOCUS_CHANGES;
+						update_diff();
 					}
 				}
 				return;
@@ -643,7 +1106,20 @@ void handle_key(Key k) {
 				return;
 			case 'T':
 				g_app_state.theme_idx = (g_app_state.theme_idx + 1) % NTHEMES;
-				OK("Theme changed");
+				OK("Theme: %s", TH->name);
+				return;
+			case 'H':
+				g_app_state.diff_continuous = !g_app_state.diff_continuous;
+				if (g_app_state.current_view == VIEW_STATUS) {
+					if (g_app_state.focus == FOCUS_GRAPH)
+						sync_graph_preview();
+					else
+						update_diff();
+				} else if (g_app_state.current_view == VIEW_LOG && g_app_state.commit_count > 0) {
+					load_diff_commit(g_app_state.commits[g_app_state.commit_sel].hash);
+				}
+				OK("Continuous Diff: %s",
+				   g_app_state.diff_continuous ? "ON (full context)" : "OFF (hunks only)");
 				return;
 			case 'V': {
 				const char *path = NULL;
@@ -662,7 +1138,9 @@ void handle_key(Key k) {
 	}
 
 	if (k.type == KEY_CTRL_C) {
-		if (g_app_state.selecting)
+		if (g_app_state.ed_selecting)
+			action_copy_editor_selection();
+		else if (g_app_state.selecting)
 			action_copy_selection();
 		else
 			action_commit();
@@ -697,19 +1175,54 @@ void handle_key(Key k) {
 	}
 
 	if (k.type == KEY_TAB) {
-		/* Simple cycle for now */
 		if (g_app_state.current_view == VIEW_STATUS) {
 			if (g_app_state.focus == FOCUS_CHANGES)
 				g_app_state.focus = FOCUS_GRAPH;
 			else if (g_app_state.focus == FOCUS_GRAPH)
 				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
-			else
-				g_app_state.focus = FOCUS_CHANGES;
+			else if (g_app_state.focus == FOCUS_DIFF || g_app_state.focus == FOCUS_EDITOR)
+				g_app_state.focus = g_app_state.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
+			else if (g_app_state.focus == FOCUS_BROWSER)
+				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+		} else {
+			g_app_state.current_view = (View)((g_app_state.current_view + 1) % VIEW_COUNT);
+		}
+		return;
+	}
+	if (k.type == KEY_SHIFT_TAB) {
+		if (g_app_state.current_view == VIEW_STATUS) {
+			if (g_app_state.focus == FOCUS_CHANGES)
+				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+			else if (g_app_state.focus == FOCUS_GRAPH)
+				g_app_state.focus = g_app_state.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
+			else if (g_app_state.focus == FOCUS_DIFF || g_app_state.focus == FOCUS_EDITOR)
+				g_app_state.focus = FOCUS_GRAPH;
+			else if (g_app_state.focus == FOCUS_BROWSER)
+				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+		} else {
+			g_app_state.current_view =
+				(View)((g_app_state.current_view + VIEW_COUNT - 1) % VIEW_COUNT);
 		}
 		return;
 	}
 
 	/* View specific navigation */
+	if (g_app_state.current_view == VIEW_STATUS) {
+		if (k.type == KEY_LEFT) {
+			if (g_app_state.focus == FOCUS_DIFF)
+				g_app_state.focus = FOCUS_GRAPH;
+			else if (g_app_state.focus == FOCUS_GRAPH)
+				g_app_state.focus = FOCUS_CHANGES;
+			return;
+		}
+		if (k.type == KEY_RIGHT) {
+			if (g_app_state.focus == FOCUS_CHANGES)
+				g_app_state.focus = FOCUS_GRAPH;
+			else if (g_app_state.focus == FOCUS_GRAPH)
+				g_app_state.focus = FOCUS_DIFF;
+			return;
+		}
+	}
 	if (g_app_state.current_view == VIEW_STATUS && g_app_state.focus == FOCUS_CHANGES) {
 		int cnt = g_app_state.file_count;
 		int cvis = imax(1, g_app_state.layout_height_changes - 6);
@@ -720,8 +1233,40 @@ void handle_key(Key k) {
 			case KEY_DOWN:
 				msel(&g_app_state.file_sel, &g_app_state.file_scroll, cnt, 1, cvis, false);
 				break;
+			case KEY_PGUP:
+				msel(&g_app_state.file_sel, &g_app_state.file_scroll, cnt, -cvis, cvis, false);
+				break;
+			case KEY_PGDN:
+				msel(&g_app_state.file_sel, &g_app_state.file_scroll, cnt, cvis, cvis, false);
+				break;
+			case KEY_HOME:
+				g_app_state.file_sel = 0;
+				g_app_state.file_scroll = 0;
+				break;
+			case KEY_END:
+				g_app_state.file_sel = cnt > 0 ? cnt - 1 : 0;
+				break;
 			case KEY_CHAR:
-				if (k.ch == ' ') action_stage();
+				if (k.ch == ' ')
+					action_stage();
+				else if (k.ch == 'a')
+					action_stage_all();
+				else if (k.ch == 'u')
+					action_unstage_all();
+				else if (k.ch == 'd')
+					action_discard();
+				else if (k.ch == 's')
+					action_stash();
+				else if (k.ch == 'g') {
+					g_app_state.file_sel = 0;
+					g_app_state.file_scroll = 0;
+				} else if (k.ch == 'G') {
+					g_app_state.file_sel = cnt > 0 ? cnt - 1 : 0;
+				} else if (k.ch == '>') {
+					toggle_commit_expansion();
+				} else if (k.ch == '=') {
+					g_app_state.focus = FOCUS_DIFF;
+				}
 				break;
 			case KEY_ENTER:
 				g_app_state.focus = FOCUS_DIFF;
@@ -733,34 +1278,228 @@ void handle_key(Key k) {
 	} else if (g_app_state.current_view == VIEW_STATUS && g_app_state.focus == FOCUS_GRAPH) {
 		int cnt = g_app_state.commit_count;
 		int gvis = g_app_state.layout_height_graph - 2;
+		GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
 		switch (k.type) {
 			case KEY_UP:
-				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, -1, gvis, true);
+				if (c->expanded && g_app_state.graph_file_sel >= 0) {
+					g_app_state.graph_file_sel--;
+				} else {
+					msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, -1, gvis,
+						 true);
+					c = &g_app_state.commits[g_app_state.commit_sel];
+					if (c->expanded)
+						g_app_state.graph_file_sel = c->file_count - 1;
+					else
+						g_app_state.graph_file_sel = -1;
+				}
 				break;
 			case KEY_DOWN:
-				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, 1, gvis, true);
+				if (c->expanded && g_app_state.graph_file_sel < c->file_count - 1) {
+					g_app_state.graph_file_sel++;
+				} else {
+					msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, 1, gvis,
+						 true);
+					g_app_state.graph_file_sel = -1;
+				}
+				break;
+			case KEY_PGUP:
+				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, -gvis / 2, gvis,
+					 true);
+				g_app_state.graph_file_sel = -1;
+				break;
+			case KEY_PGDN:
+				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, gvis / 2, gvis,
+					 true);
+				g_app_state.graph_file_sel = -1;
+				break;
+			case KEY_HOME:
+				g_app_state.commit_sel = 0;
+				g_app_state.commit_scroll = 0;
+				g_app_state.graph_file_sel = -1;
+				break;
+			case KEY_END:
+				g_app_state.commit_sel = cnt ? cnt - 1 : 0;
+				g_app_state.graph_file_sel = -1;
+				break;
+			case KEY_RIGHT:
+				if (!c->expanded) {
+					c->expanded = true;
+					fetch_commit_files(g_app_state.commit_sel);
+				} else if (g_app_state.graph_file_sel == -1 && c->file_count > 0) {
+					g_app_state.graph_file_sel = 0;
+				}
+				break;
+			case KEY_LEFT:
+				if (c->expanded) {
+					if (g_app_state.graph_file_sel >= 0)
+						g_app_state.graph_file_sel = -1;
+					else
+						c->expanded = false;
+				}
+				break;
+			case KEY_CHAR:
+				if (k.ch == ' ')
+					toggle_commit_expansion();
+				else if (k.ch == 'a')
+					action_stage_all();
+				else if (k.ch == 'u')
+					action_unstage_all();
+				else if (k.ch == 'd')
+					action_discard();
+				else if (k.ch == 's')
+					action_stash();
+				else if (k.ch == 'g') {
+					g_app_state.commit_sel = 0;
+					g_app_state.commit_scroll = 0;
+					g_app_state.graph_file_sel = -1;
+				} else if (k.ch == 'G') {
+					g_app_state.commit_sel = g_app_state.commit_count > 0
+												 ? g_app_state.commit_count - 1
+												 : 0;
+					g_app_state.graph_file_sel = -1;
+				} else if (k.ch == '>' || k.ch == '=') {
+					toggle_commit_expansion();
+				}
 				break;
 			case KEY_ENTER:
 				if (g_app_state.commit_count > 0) {
 					g_app_state.diff_staged = false;
 					g_app_state.diff_is_summary = false;
-					load_diff_commit(g_app_state.commits[g_app_state.commit_sel].hash);
+					sync_graph_preview();
 					g_app_state.focus = FOCUS_DIFF;
 				}
 				break;
 			default:
 				break;
 		}
-	} else if (g_app_state.focus == FOCUS_DIFF) {
+		if (g_app_state.commit_count > 0 && k.type != KEY_ENTER) sync_graph_preview();
+	} else if (g_app_state.current_view == VIEW_LOG) {
+		int cnt = g_app_state.commit_count;
+		int vis = g_app_state.layout_height_log - 2;
 		switch (k.type) {
 			case KEY_UP:
-				g_app_state.diff_scroll = imax(0, g_app_state.diff_scroll - 1);
+				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, -1, vis, false);
+				show_log_commit();
 				break;
 			case KEY_DOWN:
-				g_app_state.diff_scroll++;
+				msel(&g_app_state.commit_sel, &g_app_state.commit_scroll, cnt, 1, vis, false);
+				show_log_commit();
+				break;
+			case KEY_ENTER:
+				show_log_commit();
 				break;
 			default:
 				break;
+		}
+	} else if (g_app_state.current_view == VIEW_BRANCHES) {
+		int cnt = g_app_state.branch_count;
+		int vis = g_app_state.rows - 2;
+		switch (k.type) {
+			case KEY_UP:
+				msel(&g_app_state.branch_sel, &g_app_state.branch_scroll, cnt, -1, vis, false);
+				break;
+			case KEY_DOWN:
+				msel(&g_app_state.branch_sel, &g_app_state.branch_scroll, cnt, 1, vis, false);
+				break;
+			case KEY_ENTER:
+				action_checkout();
+				break;
+			case KEY_CHAR:
+				if (k.ch == 'n') action_new_branch();
+				if (k.ch == 'D') action_delete_branch();
+				break;
+			default:
+				break;
+		}
+	} else if (g_app_state.current_view == VIEW_STASH) {
+		int cnt = g_app_state.stash_count;
+		switch (k.type) {
+			case KEY_UP:
+				g_app_state.stash_sel =
+					iclamp(g_app_state.stash_sel - 1, 0, cnt > 0 ? cnt - 1 : 0);
+				break;
+			case KEY_DOWN:
+				g_app_state.stash_sel =
+					iclamp(g_app_state.stash_sel + 1, 0, cnt > 0 ? cnt - 1 : 0);
+				break;
+			case KEY_ENTER:
+				action_apply_stash();
+				break;
+			case KEY_CHAR:
+				if (k.ch == 'p') action_pop_stash();
+				if (k.ch == 'D') action_drop_stash();
+				if (k.ch == 's') action_stash();
+				break;
+			default:
+				break;
+		}
+	} else if (g_app_state.focus == FOCUS_DIFF) {
+		int vis =
+			((g_app_state.current_view == VIEW_LOG) ? g_app_state.diff_height_log
+													: (g_app_state.rows - 2)) -
+			2;
+		vis = imax(1, vis);
+		switch (k.type) {
+			case KEY_UP:
+				if (g_app_state.diff_is_summary)
+					g_app_state.diff_sel = imax(0, g_app_state.diff_sel - 1);
+				else
+					g_app_state.diff_scroll = imax(0, g_app_state.diff_scroll - 1);
+				break;
+			case KEY_DOWN:
+				if (g_app_state.diff_is_summary)
+					g_app_state.diff_sel =
+						imin(g_app_state.diff_count > 0 ? g_app_state.diff_count - 1 : 0,
+							 g_app_state.diff_sel + 1);
+				else
+					g_app_state.diff_scroll++;
+				break;
+			case KEY_PGUP:
+				if (g_app_state.diff_is_summary)
+					g_app_state.diff_sel = imax(0, g_app_state.diff_sel - vis);
+				else
+					g_app_state.diff_scroll = imax(0, g_app_state.diff_scroll - vis);
+				break;
+			case KEY_PGDN:
+				if (g_app_state.diff_is_summary)
+					g_app_state.diff_sel =
+						imin(g_app_state.diff_count > 0 ? g_app_state.diff_count - 1 : 0,
+							 g_app_state.diff_sel + vis);
+				else
+					g_app_state.diff_scroll += vis;
+				break;
+			case KEY_HOME:
+				if (g_app_state.diff_is_summary)
+					g_app_state.diff_sel = 0;
+				else
+					g_app_state.diff_scroll = 0;
+				break;
+			case KEY_END:
+				if (g_app_state.diff_is_summary)
+					g_app_state.diff_sel =
+						g_app_state.diff_count > 0 ? g_app_state.diff_count - 1 : 0;
+				else
+					g_app_state.diff_scroll = g_app_state.diff_count;
+				break;
+			case KEY_CTRL_C:
+				if (g_app_state.selecting) action_copy_selection();
+				break;
+			case KEY_ENTER:
+				if (g_app_state.diff_is_summary && g_app_state.diff_count > 0)
+					open_diff_summary_at(g_app_state.diff_sel);
+				break;
+			default:
+				break;
+		}
+		if (g_app_state.diff_is_summary) {
+			int max_sel = g_app_state.diff_count > 0 ? g_app_state.diff_count - 1 : 0;
+			g_app_state.diff_sel = iclamp(g_app_state.diff_sel, 0, max_sel);
+			int maxsc = imax(0, g_app_state.diff_count - vis);
+			if (g_app_state.diff_sel < g_app_state.diff_scroll)
+				g_app_state.diff_scroll = g_app_state.diff_sel;
+			if (g_app_state.diff_sel >= g_app_state.diff_scroll + vis)
+				g_app_state.diff_scroll = g_app_state.diff_sel - vis + 1;
+			g_app_state.diff_scroll = iclamp(g_app_state.diff_scroll, 0, maxsc);
 		}
 	}
 }

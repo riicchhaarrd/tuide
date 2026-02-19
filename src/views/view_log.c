@@ -18,6 +18,8 @@ void draw_log(int top, int h) {
 		g_app_state.commit_scroll = g_app_state.commit_sel;
 	if (g_app_state.commit_sel >= g_app_state.commit_scroll + vis)
 		g_app_state.commit_scroll = g_app_state.commit_sel - vis + 1;
+	int maxsc = imax(0, g_app_state.commit_count - (vis - 1)); /* -1 for header */
+	g_app_state.commit_scroll = iclamp(g_app_state.commit_scroll, 0, maxsc);
 
 	at(row, 2);
 	cbg(TH->bg_header);

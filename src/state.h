@@ -55,6 +55,7 @@ typedef struct {
 	char filename[512];
 	bool modified;
 	uint64_t saved_hash;
+	bool needs_sync;
 	HistEntry undo_stack[MAX_UNDO];
 	int undo_top;
 	HistEntry redo_stack[MAX_UNDO];
@@ -181,6 +182,7 @@ typedef struct {
 	char status_msg[256];
 	time_t status_msg_time;
 	bool status_is_err;
+	bool needs_sync;
 
 	/* Repo */
 	char branch_name[128];

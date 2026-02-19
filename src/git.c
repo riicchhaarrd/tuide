@@ -140,20 +140,33 @@ void load_log(void) {
 			GitCommit *c = &g_app_state.commits[g_app_state.commit_count];
 			memset(c, 0, sizeof(*c));
 
-			char *tok = strtok(buf, "\x01");
-			if (tok) snprintf(c->hash, sizeof(c->hash), "%s", tok);
-			tok = strtok(NULL, "\x01");
-			if (tok) snprintf(c->author, sizeof(c->author), "%s", tok);
-			tok = strtok(NULL, "\x01");
-			if (tok) snprintf(c->email, sizeof(c->email), "%s", tok);
-			tok = strtok(NULL, "\x01");
-			if (tok) snprintf(c->date, sizeof(c->date), "%s", tok);
-			tok = strtok(NULL, "\x01");
-			if (tok) snprintf(c->refs, sizeof(c->refs), "%s", tok);
-			tok = strtok(NULL, "");
-			if (tok) {
-				strtrim(tok);
-				snprintf(c->subject, sizeof(c->subject), "%s", tok);
+			char *fields[6] = {"", "", "", "", "", ""};
+			char *p = buf;
+			for (int f = 0; f < 5; f++) {
+				if (!p) {
+					fields[f] = "";
+					continue;
+				}
+				char *sep = strchr(p, '\x01');
+				if (sep) {
+					*sep = '\0';
+					fields[f] = p;
+					p = sep + 1;
+				} else {
+					fields[f] = p;
+					p = NULL;
+				}
+			}
+			fields[5] = p ? p : "";
+
+			snprintf(c->hash, sizeof(c->hash), "%s", fields[0]);
+			snprintf(c->author, sizeof(c->author), "%s", fields[1]);
+			snprintf(c->email, sizeof(c->email), "%s", fields[2]);
+			snprintf(c->date, sizeof(c->date), "%s", fields[3]);
+			snprintf(c->refs, sizeof(c->refs), "%s", fields[4]);
+			if (fields[5][0]) {
+				strtrim(fields[5]);
+				snprintf(c->subject, sizeof(c->subject), "%s", fields[5]);
 			}
 
 			g_app_state.commit_count++;
