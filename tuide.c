@@ -168,6 +168,10 @@ typedef enum {
     FS_STAGED_DEL,FS_DELETED,FS_RENAMED,FS_CONFLICT,FS_COPIED
 } FileStatus;
 
+/* Undo/redo history entry: snapshot of entire file as flat string + cursor */
+#define MAX_UNDO 80
+typedef struct { char *text; int cy, cx; } HistEntry;
+
 typedef struct {
     char **lines;
     int line_count, line_cap;
@@ -175,6 +179,11 @@ typedef struct {
     int scroll_y, scroll_x;
     char filename[512];
     bool modified;
+    /* Undo/redo stacks */
+    HistEntry undo_stack[MAX_UNDO];
+    int       undo_top;      /* 0 = empty */
+    HistEntry redo_stack[MAX_UNDO];
+    int       redo_top;
 } Editor;
 
 typedef struct {
@@ -211,6 +220,7 @@ typedef enum {
     KEY_CTRL_F,KEY_CTRL_G,KEY_CTRL_K,KEY_CTRL_N,KEY_CTRL_P,
     KEY_CTRL_U,KEY_CTRL_W,KEY_CTRL_Y,
     KEY_CTRL_R,KEY_CTRL_S,KEY_CTRL_L,KEY_CTRL_Q,KEY_CTRL_V,KEY_CTRL_X,
+    KEY_CTRL_Z,
     KEY_SHIFT_UP,KEY_SHIFT_DOWN,KEY_SHIFT_LEFT,KEY_SHIFT_RIGHT,
     KEY_MOUSE,KEY_CHAR,
     KEY_F1,KEY_F2,KEY_F3,KEY_F4,KEY_F5
@@ -2454,6 +2464,7 @@ static Key read_key(void){
     case 23:k.type=KEY_CTRL_W;return k;
     case 24:k.type=KEY_CTRL_X;return k;
     case 25:k.type=KEY_CTRL_Y;return k;
+    case 26:k.type=KEY_CTRL_Z;return k;
     }
     if(buf[0]>=32&&buf[0]<127){k.type=KEY_CHAR;k.ch=(char)buf[0];return k;}
     return k;
