@@ -598,6 +598,345 @@ void action_unstage_all(void) {
 	load_status();
 	update_diff();
 }
+
+typedef struct {
+	char *buf;
+	size_t len;
+	size_t cap;
+} StrBuf;
+
+typedef struct {
+	int header_idx, start_idx, end_idx;
+	int old_start, old_count, new_start, new_count;
+	int orig_adds, orig_dels;
+} HunkInfo;
+
+static bool sb_reserve(StrBuf *sb, size_t add) {
+	size_t need = sb->len + add + 1;
+	if (need <= sb->cap) return true;
+	size_t ncap = sb->cap ? sb->cap : 1024;
+	while (ncap < need) ncap *= 2;
+	char *nb = realloc(sb->buf, ncap);
+	if (!nb) return false;
+	sb->buf = nb;
+	sb->cap = ncap;
+	return true;
+}
+
+static bool sb_append_line(StrBuf *sb, char prefix, const char *text) {
+	size_t tlen = strlen(text);
+	if (!sb_reserve(sb, tlen + 2)) return false;
+	sb->buf[sb->len++] = prefix;
+	memcpy(sb->buf + sb->len, text, tlen);
+	sb->len += tlen;
+	sb->buf[sb->len++] = '\n';
+	sb->buf[sb->len] = '\0';
+	return true;
+}
+
+static void sb_free(StrBuf *sb) {
+	free(sb->buf);
+	sb->buf = NULL;
+	sb->len = 0;
+	sb->cap = 0;
+}
+
+static bool parse_hunk_header(const char *s, int *o_start, int *o_count, int *n_start,
+							  int *n_count) {
+	int os = 0, oc = 0, ns = 0, nc = 0;
+	if (sscanf(s, "@@ -%d,%d +%d,%d", &os, &oc, &ns, &nc) == 4) {
+		/* ok */
+	} else if (sscanf(s, "@@ -%d +%d,%d", &os, &ns, &nc) == 3) {
+		oc = 1;
+	} else if (sscanf(s, "@@ -%d,%d +%d", &os, &oc, &ns) == 3) {
+		nc = 1;
+	} else if (sscanf(s, "@@ -%d +%d", &os, &ns) == 2) {
+		oc = 1;
+		nc = 1;
+	} else {
+		return false;
+	}
+	*o_start = os;
+	*o_count = oc;
+	*n_start = ns;
+	*n_count = nc;
+	return true;
+}
+
+static int collect_hunks(HunkInfo **out_hunks) {
+	int max = g_app_state.diff_count;
+	HunkInfo *hunks = calloc(max, sizeof(HunkInfo));
+	if (!hunks) return -1;
+	int count = 0;
+	for (int i = 0; i < g_app_state.diff_count; i++) {
+		DiffLine *dl = &g_app_state.diff_lines[i];
+		if (dl->type != 3) continue;
+		if (count >= max) break;
+		HunkInfo *h = &hunks[count];
+		memset(h, 0, sizeof(*h));
+		h->header_idx = i;
+		h->start_idx = i + 1;
+		if (!parse_hunk_header(dl->new_line, &h->old_start, &h->old_count, &h->new_start,
+							   &h->new_count)) {
+			free(hunks);
+			return -1;
+		}
+		int j = i + 1;
+		for (; j < g_app_state.diff_count; j++) {
+			int t = g_app_state.diff_lines[j].type;
+			if (t == 3 || t == 4) break;
+		}
+		h->end_idx = j;
+		for (int k = h->start_idx; k < h->end_idx; k++) {
+			int t = g_app_state.diff_lines[k].type;
+			if (t == 1)
+				h->orig_adds++;
+			else if (t == 2)
+				h->orig_dels++;
+		}
+		count++;
+		i = j - 1;
+	}
+	*out_hunks = hunks;
+	return count;
+}
+
+static void format_patch_path(const char *prefix, const char *path, char *out, size_t out_sz) {
+	char full[1024];
+	snprintf(full, sizeof(full), "%s%s", prefix, path);
+	bool need_quote = false;
+	for (const char *p = full; *p; p++) {
+		if (*p == ' ' || *p == '\t' || *p == '"' || *p == '\\') {
+			need_quote = true;
+			break;
+		}
+	}
+	if (!need_quote) {
+		snprintf(out, out_sz, "%s", full);
+		return;
+	}
+	char tmp[2048];
+	size_t di = 0;
+	tmp[di++] = '"';
+	for (const char *p = full; *p && di + 2 < sizeof(tmp); p++) {
+		if (*p == '"' || *p == '\\') tmp[di++] = '\\';
+		tmp[di++] = *p;
+	}
+	tmp[di++] = '"';
+	tmp[di] = '\0';
+	snprintf(out, out_sz, "%s", tmp);
+}
+
+static int apply_patch_selection(bool reverse) {
+	if (g_app_state.diff_is_summary || g_app_state.diff_commit[0]) {
+		ERR("Select a working tree diff");
+		return -1;
+	}
+	if (!g_app_state.file_count || g_app_state.file_sel < 0 ||
+		g_app_state.file_sel >= g_app_state.file_count) {
+		ERR("No file selected");
+		return -1;
+	}
+	if (g_app_state.diff_count <= 0) {
+		ERR("No diff");
+		return -1;
+	}
+	if (reverse && !g_app_state.diff_staged) {
+		ERR("Viewing unstaged diff");
+		return -1;
+	}
+	if (!reverse && g_app_state.diff_staged) {
+		ERR("Viewing staged diff");
+		return -1;
+	}
+
+	HunkInfo *hunks = NULL;
+	int hunk_count = collect_hunks(&hunks);
+	if (hunk_count < 0) {
+		ERR("Failed to parse hunks");
+		return -1;
+	}
+	if (hunk_count == 0) {
+		free(hunks);
+		ERR("No hunks to stage");
+		return -1;
+	}
+
+	bool has_sel = g_app_state.selecting;
+	int sel_sy = 0, sel_ey = 0;
+	bool sel_left = true, sel_right = true;
+	if (has_sel) {
+		sel_sy = g_app_state.sel_start_y;
+		sel_ey = g_app_state.sel_end_y;
+		if (sel_sy > sel_ey) {
+			int t = sel_sy;
+			sel_sy = sel_ey;
+			sel_ey = t;
+		}
+		sel_sy = iclamp(sel_sy, 0, g_app_state.diff_count - 1);
+		sel_ey = iclamp(sel_ey, 0, g_app_state.diff_count - 1);
+		if (g_app_state.diff_sidebyside) {
+			int sx = g_app_state.sel_start_x;
+			int ex = g_app_state.sel_end_x;
+			if (sx > ex) {
+				int t = sx;
+				sx = ex;
+				ex = t;
+			}
+			int split = g_app_state.diff_split;
+			if (ex < split) {
+				sel_right = false;
+			} else if (sx >= split) {
+				sel_left = false;
+			}
+		}
+	}
+
+	int target_hunk = -1;
+	if (!has_sel) {
+		int line = iclamp(g_app_state.diff_scroll, 0, g_app_state.diff_count - 1);
+		for (int i = 0; i < hunk_count; i++) {
+			HunkInfo *h = &hunks[i];
+			if (line >= h->header_idx && line < h->end_idx) {
+				target_hunk = i;
+				break;
+			}
+			if (line < h->header_idx) {
+				target_hunk = i;
+				break;
+			}
+		}
+		if (target_hunk < 0) target_hunk = hunk_count - 1;
+	}
+
+	char tmp[] = "/tmp/tuide_patch_XXXXXX";
+	int fd = mkstemp(tmp);
+	if (fd < 0) {
+		free(hunks);
+		ERR("mkstemp failed");
+		return -1;
+	}
+	FILE *fp = fdopen(fd, "w");
+	if (!fp) {
+		close(fd);
+		unlink(tmp);
+		free(hunks);
+		ERR("mkstemp failed");
+		return -1;
+	}
+
+	bool wrote_header = false;
+	int delta_orig = 0, delta_sel = 0;
+	int total_sel = 0;
+	bool oom = false;
+
+	for (int hi = 0; hi < hunk_count; hi++) {
+		HunkInfo *h = &hunks[hi];
+		int orig_delta = h->orig_adds - h->orig_dels;
+
+		if (!has_sel && hi != target_hunk) {
+			delta_orig += orig_delta;
+			continue;
+		}
+
+		StrBuf hb = {0};
+		int old_count = 0, new_count = 0;
+		int sel_adds = 0, sel_dels = 0;
+
+		for (int i = h->start_idx; i < h->end_idx; i++) {
+			DiffLine *dl = &g_app_state.diff_lines[i];
+			if (dl->type == 0) {
+				if (!sb_append_line(&hb, ' ', dl->old_line)) {
+					oom = true;
+					break;
+				}
+				old_count++;
+				new_count++;
+			} else if (dl->type == 1) {
+				bool sel = !has_sel || (i >= sel_sy && i <= sel_ey && sel_right);
+				if (sel) {
+					if (!sb_append_line(&hb, '+', dl->new_line)) {
+						oom = true;
+						break;
+					}
+					new_count++;
+					sel_adds++;
+				}
+			} else if (dl->type == 2) {
+				bool sel = !has_sel || (i >= sel_sy && i <= sel_ey && sel_left);
+				if (sel) {
+					if (!sb_append_line(&hb, '-', dl->old_line)) {
+						oom = true;
+						break;
+					}
+					old_count++;
+					sel_dels++;
+				} else {
+					if (!sb_append_line(&hb, ' ', dl->old_line)) {
+						oom = true;
+						break;
+					}
+					old_count++;
+					new_count++;
+				}
+			}
+		}
+
+		if (!oom && sel_adds + sel_dels > 0) {
+			if (!wrote_header) {
+				GitFile *f = &g_app_state.files[g_app_state.file_sel];
+				char a_path[1024], b_path[1024];
+				format_patch_path("a/", f->path, a_path, sizeof(a_path));
+				format_patch_path("b/", f->path, b_path, sizeof(b_path));
+				fprintf(fp, "diff --git %s %s\n", a_path, b_path);
+				fprintf(fp, "--- %s\n+++ %s\n", a_path, b_path);
+				wrote_header = true;
+			}
+			int new_start = h->new_start + (delta_sel - delta_orig);
+			fprintf(fp, "@@ -%d,%d +%d,%d @@\n", h->old_start, old_count, new_start,
+					new_count);
+			if (hb.len) fwrite(hb.buf, 1, hb.len, fp);
+			delta_sel += sel_adds - sel_dels;
+			total_sel += sel_adds + sel_dels;
+		}
+
+		sb_free(&hb);
+		if (oom) break;
+		delta_orig += orig_delta;
+	}
+
+	fclose(fp);
+
+	if (oom) {
+		unlink(tmp);
+		free(hunks);
+		ERR("Out of memory");
+		return -1;
+	}
+	if (!wrote_header || total_sel == 0) {
+		unlink(tmp);
+		free(hunks);
+		ERR(has_sel ? "No changed lines selected" : "No hunk selected");
+		return -1;
+	}
+
+	int r = git_exec("git apply --cached %s '%s'", reverse ? "-R" : "", tmp);
+	unlink(tmp);
+	free(hunks);
+	if (r == 0) {
+		OK(reverse ? "Unstaged selection" : "Staged selection");
+		load_status();
+		update_diff();
+		g_app_state.selecting = false;
+		return 0;
+	}
+	ERR(reverse ? "Unstage failed" : "Stage failed");
+	return -1;
+}
+
+void action_stage_selection(void) { apply_patch_selection(false); }
+
+void action_unstage_selection(void) { apply_patch_selection(true); }
 void action_discard(void) {
 	if (!g_app_state.file_count) return;
 	GitFile *f = &g_app_state.files[g_app_state.file_sel];

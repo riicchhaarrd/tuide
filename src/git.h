@@ -23,6 +23,8 @@ void sync_graph_preview(void);
 void action_stage(void);
 void action_stage_all(void);
 void action_unstage_all(void);
+void action_stage_selection(void);
+void action_unstage_selection(void);
 void action_discard(void);
 void action_commit(void);
 void action_amend(void);

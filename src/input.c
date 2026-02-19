@@ -397,7 +397,15 @@ static void handle_mouse(MouseEvt m) {
 			return;
 		}
 		menu_reset(m.col, m.row);
-		if (g_app_state.selecting) menu_add_item("Copy", action_copy_selection);
+		if (g_app_state.selecting) {
+			menu_add_item("Copy", action_copy_selection);
+			if (!g_app_state.diff_is_summary && !g_app_state.diff_commit[0]) {
+				if (g_app_state.diff_staged)
+					menu_add_item("Unstage", action_unstage_selection);
+				else
+					menu_add_item("Stage", action_stage_selection);
+			}
+		}
 		menu_add_item("Cancel", NULL);
 		return;
 	}
@@ -1501,6 +1509,18 @@ void handle_key(Key k) {
 				break;
 			case KEY_CTRL_C:
 				if (g_app_state.selecting) action_copy_selection();
+				break;
+			case KEY_CHAR:
+				if (k.ch == ' ') {
+					if (g_app_state.diff_staged)
+						action_unstage_selection();
+					else
+						action_stage_selection();
+				} else if (k.ch == 'S') {
+					action_stage_selection();
+				} else if (k.ch == 'U') {
+					action_unstage_selection();
+				}
 				break;
 			case KEY_ENTER:
 				if (g_app_state.diff_is_summary && g_app_state.diff_count > 0)
