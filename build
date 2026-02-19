@@ -1,1 +1,1 @@
-cc -std=c99 -O2 -o gitui gitui.c
+cc -std=c99 -O2 -o tuide tuide.c
