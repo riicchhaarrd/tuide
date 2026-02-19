@@ -3202,6 +3202,21 @@ static void handle_mouse(MouseEvt m){
     }
     if(cl && (G.current_view == VIEW_STATUS || G.current_view == VIEW_LOG) && m.col > drx && m.row > dtop && m.row < G.rows-1){
         if(G.editor_active){
+            if(m.col >= G.ed_sc_x && G.ed_sc_h > 0 && m.row >= G.ed_sc_y && m.row < G.ed_sc_y + G.ed_sc_h){
+                int bh = imax(1, (G.ed_sc_vis * G.ed_sc_vis) / G.ed_sc_total);
+                int max_bpos = G.ed_sc_h - bh;
+                int bpos = (max_bpos > 0 && G.ed_sc_total > G.ed_sc_vis) ? ((CUR_ED.scroll_y * max_bpos) / (G.ed_sc_total - G.ed_sc_vis)) : 0;
+                if(m.row >= G.ed_sc_y + bpos && m.row < G.ed_sc_y + bpos + bh){
+                    G.dragging_ed_sc = true;
+                    G.ed_sc_drag_offset = m.row - (G.ed_sc_y + bpos);
+                } else if(max_bpos > 0){
+                    int target_bpos = iclamp(m.row - G.ed_sc_y - bh/2, 0, max_bpos);
+                    CUR_ED.scroll_y = (target_bpos * (G.ed_sc_total - G.ed_sc_vis)) / max_bpos;
+                    G.dragging_ed_sc = true;
+                    G.ed_sc_drag_offset = bh/2;
+                }
+                return;
+            }
             G.ed_selecting = true;
             G.ed_sel_start_y = G.ed_sel_end_y = CUR_ED.scroll_y + (m.row - (dtop+2));
             G.ed_sel_start_x = G.ed_sel_end_x = m.col - (drx + 7) + CUR_ED.scroll_x;
