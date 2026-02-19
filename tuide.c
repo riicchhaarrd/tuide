@@ -371,6 +371,29 @@ static int git_exec(const char *fmt,...){
     return system(full);
 }
 
+static void copy_to_sys_clipboard(const char *text) {
+    if (!text || !text[0]) return;
+    const char *cmds[] = {
+        "xclip -selection clipboard",
+        "xsel --clipboard --input",
+        "wl-copy",
+        "pbcopy",
+        "clip.exe"
+    };
+    for (int i = 0; i < 5; i++) {
+        char check[256];
+        snprintf(check, sizeof(check), "command -v %s >/dev/null 2>&1", (i==0)?"xclip":(i==1)?"xsel":(i==2)?"wl-copy":(i==3)?"pbcopy":"clip.exe");
+        if (system(check) == 0) {
+            FILE *fp = popen(cmds[i], "w");
+            if (fp) {
+                fputs(text, fp);
+                pclose(fp);
+                return;
+            }
+        }
+    }
+}
+
 /* ================================================================
    TERMINAL
 ================================================================ */
@@ -3071,7 +3094,8 @@ static void action_copy_editor_selection(void){
         }
     }
     G.clipboard[len] = '\0';
-    OK("Copied %d chars from editor", (int)len);
+    copy_to_sys_clipboard(G.clipboard);
+    OK("Copied %d chars from editor to system clipboard", (int)len);
 }
 
 static void editor_delete_selection(void){
@@ -3662,7 +3686,8 @@ static void action_copy_selection(void){
         }
     }
     G.clipboard[len] = '\0';
-    OK("Copied %d chars", (int)len);
+    copy_to_sys_clipboard(G.clipboard);
+    OK("Copied %d chars to system clipboard", (int)len);
 }
 
 /* ================================================================
