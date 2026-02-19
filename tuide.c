@@ -1,6 +1,6 @@
 
 /*
- * gitui v2.0 - Modern Git TUI, pure C99, zero dependencies
+ * tuide v3.0.0 - Modern Git TUI & IDE, pure C99, zero dependencies
  *
  *  Layout (Status view):
  *  ┌─── Changes ───┬──────────── Side-by-Side Diff ────────────┐
@@ -10,11 +10,11 @@
  *  │ commit graph  │                     │                      │
  *  └───────────────┴─────────────────────┴──────────────────────┘
  *
- *  Themes: T cycles Dark+ / VS-Light-Blue / Solarized-Dark
+ *  Themes: T cycles Dark+ / VS-Light-Blue / Solarized-Dark / One Dark
  *  Mouse:   click to focus panes, scroll wheel, click to select
  *
- *  Build:  cc -std=c99 -O2 -o gitui gitui.c
- *  Run:    ./gitui
+ *  Build:  cc -std=c99 -O2 -o tuide tuide.c
+ *  Run:    ./tuide
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -38,12 +38,13 @@
 /* ================================================================
    CONSTANTS
 ================================================================ */
-#define VERSION        "2.17.0"
+#define VERSION        "3.0.0"
 #define MAX_FILES      512
 #define MAX_COMMITS    512
 #define MAX_BRANCHES   256
 #define MAX_STASHES    64
 #define MAX_DIFF_LINES 16384
+#define MAX_TABS       16
 #define LINE_MAX_LEN   512
 #define INPUT_MAX      512
 #define GRAPH_COLS     8
@@ -140,8 +141,22 @@ static const Theme TH_SOL = {
     {133,153,0},{220,50,47},{60,80,85}
 };
 
-static const Theme *THEMES[] = {&TH_DARK, &TH_VSLIGHT, &TH_SOL};
-#define NTHEMES 3
+/* One Dark */
+static const Theme TH_ONEDARK = {
+    "One Dark",
+    {40,44,52},{33,37,43},{62,68,81},{40,44,52},{44,50,60},{50,56,66},
+    {45,60,45},{60,45,45},{45,55,75},
+    {171,178,191},{92,99,112},{255,255,255},{255,255,255},
+    {224,108,117},{97,175,239},{152,195,121},
+    {152,195,121},{224,108,117},{92,99,112},{209,154,102},
+    {152,195,121},{224,108,117},{97,175,239},{171,178,191},
+    {{97,175,239},{198,120,221},{152,195,121},{209,154,102},{224,108,117},{86,182,194}},
+    {152,195,121},{198,120,221},{209,154,102},
+    {152,195,121},{224,108,117},{92,99,112}
+};
+
+static const Theme *THEMES[] = {&TH_DARK, &TH_VSLIGHT, &TH_SOL, &TH_ONEDARK};
+#define NTHEMES 4
 
 /* ================================================================
    ENUMS & STRUCTS
@@ -161,6 +176,11 @@ typedef struct {
     char filename[512];
     bool modified;
 } Editor;
+
+typedef struct {
+    Editor ed;
+    char path[512];
+} Tab;
 
 typedef struct { char path[512]; bool is_dir; } BrowserFile;
 
@@ -188,7 +208,7 @@ typedef enum {
     KEY_ENTER,KEY_ESC,KEY_BACKSPACE,KEY_DEL,
     KEY_TAB,KEY_SHIFT_TAB,
     KEY_CTRL_A,KEY_CTRL_B,KEY_CTRL_C,KEY_CTRL_D,KEY_CTRL_E,
-    KEY_CTRL_F,KEY_CTRL_K,KEY_CTRL_N,KEY_CTRL_P,
+    KEY_CTRL_F,KEY_CTRL_G,KEY_CTRL_K,KEY_CTRL_N,KEY_CTRL_P,
     KEY_CTRL_U,KEY_CTRL_W,KEY_CTRL_Y,
     KEY_CTRL_R,KEY_CTRL_S,KEY_CTRL_L,KEY_CTRL_Q,KEY_CTRL_V,
     KEY_MOUSE,KEY_CHAR,
@@ -261,7 +281,9 @@ typedef struct {
     char branch_name[128];
 
     /* Editor & Browser */
-    Editor editor;
+    Tab tabs[MAX_TABS];
+    int tab_count, tab_current;
+
     BrowserFile browser_files[1024];
     int browser_count, browser_sel, browser_scroll;
     char browser_path[512];
@@ -301,6 +323,7 @@ static State G;
 static volatile int g_resize = 0;
 
 #define TH (THEMES[G.theme_idx])
+#define CUR_ED (G.tabs[G.tab_current].ed)
 
 /* ================================================================
    UTIL
@@ -1014,7 +1037,7 @@ static void draw_dividers(void){
 
 static void draw_tabbar(void){
     at(1,1); cbg(TH->bg_tab_inact); cfg(TH->fg_accent2); G.cur_bold=true;
-    ppad(" ⎇ gitui ", 9); rst();
+    ppad(" ⎇ tuide ", 9); rst();
     static const struct{const char *n,*k;View v;}tabs[]={
         {"Changes","1",VIEW_STATUS},{"Log","2",VIEW_LOG},
         {"Branches","3",VIEW_BRANCHES},{"Stash","4",VIEW_STASH},
@@ -1873,39 +1896,119 @@ static void load_browser(const char *path){
     }
 }
 
-static void editor_free(void){
-    for(int i=0; i<G.editor.line_count; i++) free(G.editor.lines[i]);
-    free(G.editor.lines);
-    memset(&G.editor, 0, sizeof(Editor));
+static void action_find_file(const char *name){
+    if(!name || !name[0]) return;
+    char cmd[1024]; snprintf(cmd, sizeof(cmd), "find . -maxdepth 4 -name '*%s*' -not -path '*/.*' | head -n 100", name);
+    char *o = git_run(cmd);
+    if(!o || !o[0]){ ERR("No files matching %s", name); free(o); return; }
+    
+    G.diff_count = 0; G.diff_scroll = 0; G.diff_sel = 0; G.diff_is_summary = true;
+    snprintf(G.diff_title, sizeof(G.diff_title), "Files: %s", name);
+    G.diff_commit[0] = '\0';
+
+    char *line = o;
+    while(*line && G.diff_count < MAX_DIFF_LINES){
+        char *nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl-line) : strlen(line);
+        DiffLine *dl = &G.diff_lines[G.diff_count++]; memset(dl, 0, sizeof(*dl));
+        if(len >= LINE_MAX_LEN) len = LINE_MAX_LEN-1;
+        memcpy(dl->new_line, line, len); dl->new_line[len] = '\0';
+        dl->type = 5;
+        line = nl ? nl + 1 : line + len;
+    }
+    free(o);
+    G.focus = FOCUS_DIFF;
+}
+
+static void action_grep(const char *pattern){
+    if(!pattern || !pattern[0]) return;
+    char cmd[1024]; snprintf(cmd, sizeof(cmd), "grep -rn --exclude-dir=.git --exclude=gitui '%s' . 2>/dev/null | head -n 100", pattern);
+    char *o = git_run(cmd);
+    if(!o || !o[0]){ ERR("No matches for %s", pattern); free(o); return; }
+    
+    G.diff_count = 0; G.diff_scroll = 0; G.diff_sel = 0; G.diff_is_summary = true;
+    snprintf(G.diff_title, sizeof(G.diff_title), "Search: %s", pattern);
+    G.diff_commit[0] = '\0';
+
+    char *line = o;
+    while(*line && G.diff_count < MAX_DIFF_LINES){
+        char *nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl-line) : strlen(line);
+        DiffLine *dl = &G.diff_lines[G.diff_count++]; memset(dl, 0, sizeof(*dl));
+        if(len >= LINE_MAX_LEN) len = LINE_MAX_LEN-1;
+        memcpy(dl->new_line, line, len); dl->new_line[len] = '\0';
+        dl->type = 5;
+        line = nl ? nl + 1 : line + len;
+    }
+    free(o);
+    G.focus = FOCUS_DIFF;
+}
+
+static void editor_free(Editor *ed){
+    for(int i=0; i<ed->line_count; i++) free(ed->lines[i]);
+    free(ed->lines);
+    memset(ed, 0, sizeof(Editor));
 }
 
 static void editor_load(const char *path){
-    editor_free();
-    FILE *fp = fopen(path, "r");
+    char real[PATH_MAX];
+    if(!realpath(path, real)) snprintf(real, sizeof(real), "%s", path);
+    
+    for(int i=0; i<G.tab_count; i++){
+        if(strcmp(G.tabs[i].path, real) == 0){
+            G.tab_current = i;
+            return;
+        }
+    }
+
+    if(G.tab_count < MAX_TABS){
+        G.tab_current = G.tab_count++;
+    }
+    
+    Tab *t = &G.tabs[G.tab_current];
+    editor_free(&t->ed);
+    FILE *fp = fopen(real, "r");
     if(!fp) return;
-    snprintf(G.editor.filename, sizeof(G.editor.filename), "%s", path);
+    snprintf(t->path, sizeof(t->path), "%s", real);
+    snprintf(t->ed.filename, sizeof(t->ed.filename), "%s", real);
     char buf[4096];
     while(fgets(buf, sizeof(buf), fp)){
         strtrim(buf);
-        if(G.editor.line_count >= G.editor.line_cap){
-            G.editor.line_cap = G.editor.line_cap ? G.editor.line_cap * 2 : 128;
-            G.editor.lines = realloc(G.editor.lines, sizeof(char*) * G.editor.line_cap);
+        if(t->ed.line_count >= t->ed.line_cap){
+            t->ed.line_cap = t->ed.line_cap ? t->ed.line_cap * 2 : 128;
+            t->ed.lines = realloc(t->ed.lines, sizeof(char*) * t->ed.line_cap);
         }
-        G.editor.lines[G.editor.line_count++] = strdup(buf);
+        t->ed.lines[t->ed.line_count++] = strdup(buf);
     }
     fclose(fp);
 }
 
+static void editor_next_tab(void){
+    if(G.tab_count > 1) G.tab_current = (G.tab_current + 1) % G.tab_count;
+}
+static void editor_prev_tab(void){
+    if(G.tab_count > 1) G.tab_current = (G.tab_current + G.tab_count - 1) % G.tab_count;
+}
+static void editor_close_tab(void){
+    if(G.tab_count == 0) return;
+    editor_free(&G.tabs[G.tab_current].ed);
+    for(int i=G.tab_current; i<G.tab_count-1; i++) G.tabs[i] = G.tabs[i+1];
+    G.tab_count--;
+    if(G.tab_current >= G.tab_count && G.tab_count > 0) G.tab_current = G.tab_count - 1;
+    if(G.tab_count == 0) { G.editor_active = false; G.focus = G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES; }
+}
+
 static void editor_save(void){
-    if(!G.editor.filename[0]) return;
-    FILE *fp = fopen(G.editor.filename, "w");
+    Tab *t = &G.tabs[G.tab_current];
+    if(!t->path[0]) return;
+    FILE *fp = fopen(t->path, "w");
     if(!fp) return;
-    for(int i=0; i<G.editor.line_count; i++){
-        fprintf(fp, "%s\n", G.editor.lines[i]);
+    for(int i=0; i<t->ed.line_count; i++){
+        fprintf(fp, "%s\n", t->ed.lines[i]);
     }
     fclose(fp);
-    G.editor.modified = false;
-    OK("Saved %s", G.editor.filename);
+    t->ed.modified = false;
+    OK("Saved %s", t->path);
 }
 
 static void draw_browser(int top, int h){
@@ -1933,44 +2036,110 @@ static void draw_browser(int top, int h){
 
 static Color get_token_color(const char *tok, bool is_comment){
     if(is_comment) return TH->fg_diff_ctx;
-    static const char *kw[] = {"if","else","for","while","do","return","static","const","int","char","void","bool","struct","typedef","enum","#include","#define"};
-    for(int i=0; i<17; i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
+    static const char *kw[] = {
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "int", "long", "register", "return", "short", "signed", "sizeof", "static",
+        "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
+        "bool", "inline", "restrict", "#include", "#define", "#ifdef", "#ifndef", "#endif",
+        "#if", "#else", "#elif", "#pragma", "NULL", "true", "false", "size_t", "uint8_t",
+        "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t"
+    };
+    for(int i=0; i<(int)(sizeof(kw)/sizeof(kw[0])); i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
+    if(isdigit(tok[0])) return TH->fg_accent2;
     if(tok[0] == '"' || tok[0] == '\'') return TH->fg_unstaged;
     return TH->fg_normal;
 }
 
+static const char *get_lang_name(const char *path){
+    const char *ext = strrchr(path, '.');
+    if(!ext) return "Plain Text";
+    if(strcmp(ext, ".c") == 0) return "C";
+    if(strcmp(ext, ".h") == 0) return "C Header";
+    if(strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0) return "C++";
+    if(strcmp(ext, ".py") == 0) return "Python";
+    if(strcmp(ext, ".js") == 0) return "JavaScript";
+    if(strcmp(ext, ".ts") == 0) return "TypeScript";
+    if(strcmp(ext, ".md") == 0) return "Markdown";
+    return "Plain Text";
+}
+
 static void draw_editor(int top, int rx, int rw, int h){
+    if(G.tab_count == 0) {
+        box_top(top, rx, rw, "Editor", (G.focus == FOCUS_EDITOR), NULL);
+        box_sides(top, rx, rw, h);
+        box_fill(top, rx, rw, h, TH->bg_base);
+        at(top+h/2, rx+rw/2-10); cfg(TH->fg_dim); ppad("(no files open)", 15);
+        box_bot(top+h-1, rx, rw);
+        return;
+    }
+    Tab *t = &G.tabs[G.tab_current];
+    Editor *ed = &t->ed;
     bool act = (G.focus == FOCUS_EDITOR);
+    
+    /* Draw Tab Bar for Editor */
+    at(top, rx+1); 
+    int tab_x = rx+1;
+    for(int i=0; i<G.tab_count; i++){
+        bool cur = (i == G.tab_current);
+        if(cur) { cbg(TH->bg_tab_act); cfg(TH->fg_bright); G.cur_bold=true; }
+        else { cbg(TH->bg_tab_inact); cfg(TH->fg_dim); }
+        char *fname = strrchr(G.tabs[i].path, '/');
+        fname = fname ? fname + 1 : G.tabs[i].path;
+        char tbuf[64]; snprintf(tbuf, sizeof(tbuf), " %s%s ", fname, G.tabs[i].ed.modified?"*":"");
+        ppad(tbuf, (int)strlen(tbuf));
+        tab_x += (int)strlen(tbuf);
+        rst();
+    }
+    
     char title[512];
-    snprintf(title, sizeof(title), "Editor: %s%s", G.editor.filename[0]?G.editor.filename:"(new file)", G.editor.modified?"*":"");
-    box_top(top, rx, rw, title, act, " [Save] ");
+    snprintf(title, sizeof(title), " %s ", t->path);
+    box_top(top, rx, rw, "Editor", act, " [Save] ");
     box_sides(top, rx, rw, h);
     box_fill(top, rx, rw, h, TH->bg_base);
     int row = top+1, lim = top+h-1, vis = lim-row;
-    if(G.editor.cur_y < G.editor.scroll_y) G.editor.scroll_y = G.editor.cur_y;
-    if(G.editor.cur_y >= G.editor.scroll_y + vis) G.editor.scroll_y = G.editor.cur_y - vis + 1;
+    if(ed->cur_y < ed->scroll_y) ed->scroll_y = ed->cur_y;
+    if(ed->cur_y >= ed->scroll_y + vis) ed->scroll_y = ed->cur_y - vis + 1;
 
-    for(int i=G.editor.scroll_y; i<G.editor.line_count && row < lim; i++, row++){
+    int vis_w = rw - 8;
+    if(ed->cur_x < ed->scroll_x) ed->scroll_x = ed->cur_x;
+    if(ed->cur_x >= ed->scroll_x + vis_w) ed->scroll_x = ed->cur_x - vis_w + 1;
+
+    for(int i=ed->scroll_y; i<ed->line_count && row < lim; i++, row++){
         at(row, rx+1);
         cfg(TH->fg_linenum);
         char lno[16]; snprintf(lno, sizeof(lno), "%4d ", i+1); ppad(lno, 5);
         cfg(TH->fg_dim); ppad("│", 1);
         
-        /* Simple tokenizing for highlighting */
-        char *line = G.editor.lines[i];
-        int len = (int)strlen(line);
-        int cur_c = rx + 7;
-        bool in_comment = (strstr(line, "//") != NULL); /* extremely basic */
+        /* Simple tokenizing for highlighting with scroll_x support */
+        char *full_line = ed->lines[i];
+        int full_len = (int)strlen(full_line);
         
+        /* Substring for current view */
+        char line_buf[1024];
+        int start = ed->scroll_x;
+        int len = 0;
+        if(start < full_len){
+            len = imin(full_len - start, 1023);
+            len = imin(len, vis_w);
+            memcpy(line_buf, full_line + start, len);
+        }
+        line_buf[len] = '\0';
+
+        int cur_c = rx + 7;
+        bool in_comment = (strstr(full_line, "//") != NULL); 
+        int comment_start = in_comment ? (int)(strstr(full_line, "//") - full_line) : -1;
+
         char buf[512]; int bi=0;
         for(int j=0; j<=len && cur_c < rx+rw-1; j++){
-            char c = line[j];
+            char c = line_buf[j];
+            int real_j = j + start;
             if(isspace(c) || ispunct(c) || c == '\0'){
                 if(bi > 0){
                     buf[bi] = '\0';
-                    bool selected = is_ed_selected(i, j - bi); /* approximation */
+                    bool selected = is_ed_selected(i, real_j - bi);
                     if(selected) cbg(TH->bg_sel);
-                    cfg(get_token_color(buf, in_comment && (strstr(line, "//") <= line + j - bi)));
+                    cfg(get_token_color(buf, in_comment && (comment_start <= real_j - bi)));
                     at(row, cur_c - bi);
                     ppad(buf, bi);
                     if(selected) cbg(TH->bg_base);
@@ -1978,7 +2147,7 @@ static void draw_editor(int top, int rx, int rw, int h){
                 }
                 if(c != '\0'){
                     at(row, cur_c);
-                    bool selected = is_ed_selected(i, j);
+                    bool selected = is_ed_selected(i, real_j);
                     if(selected) cbg(TH->bg_sel);
                     cfg(TH->fg_dim);
                     char cs[2] = {c, 0}; put_cell(row, cur_c, cs);
@@ -1991,17 +2160,31 @@ static void draw_editor(int top, int rx, int rw, int h){
             }
         }
 
-        if(act && i == G.editor.cur_y){
-            at(row, rx+7+G.editor.cur_x - G.editor.scroll_x);
-            if(G.editor.cur_x - G.editor.scroll_x >= 0 && G.editor.cur_x - G.editor.scroll_x < rw-8){
+        if(act && i == ed->cur_y){
+            int cursor_screen_x = rx+7+ed->cur_x - ed->scroll_x;
+            if(cursor_screen_x >= rx+7 && cursor_screen_x < rx+rw-1){
+                at(row, cursor_screen_x);
                 cbg(TH->fg_accent1); cfg(TH->bg_base);
-                char c = G.editor.lines[i][G.editor.cur_x];
+                char c = ed->lines[i][ed->cur_x];
                 char cs[2] = {c?c:' ', 0};
-                put_cell(row, rx+7+G.editor.cur_x - G.editor.scroll_x, cs);
+                put_cell(row, cursor_screen_x, cs);
             }
         }
         rst();
     }
+    while(row < lim){
+        at(row, rx+1); cbg(TH->bg_base); 
+        for(int i=0; i<rw-2; i++) put_cell(row, rx+1+i, " ");
+        row++;
+    }
+
+    /* Editor Status Line */
+    at(top+h-2, rx+1); cbg(TH->bg_panel); cfg(TH->fg_dim);
+    char sbuf[256];
+    snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  [UTF-8]  %s ", ed->cur_y+1, ed->cur_x+1, get_lang_name(t->path));
+    ppad(sbuf, rw-2);
+    rst();
+
     box_bot(top+h-1, rx, rw);
 }
 
@@ -2140,6 +2323,7 @@ static Key read_key(void){
     case 4:k.type=KEY_CTRL_D;return k;
     case 5:k.type=KEY_CTRL_E;return k;
     case 6:k.type=KEY_CTRL_F;return k;
+    case 7:k.type=KEY_CTRL_G;return k;
     case 11:k.type=KEY_CTRL_K;return k;
     case 12:k.type=KEY_CTRL_L;return k;
     case 14:k.type=KEY_CTRL_N;return k;
@@ -2213,6 +2397,26 @@ static void handle_prompt_key(Key k){
 /* ================================================================
    GIT ACTIONS
 ================================================================ */
+static void action_new_file(const char *name){
+    if(!name || !name[0]) return;
+    char full[1024]; snprintf(full, sizeof(full), "%s/%s", G.browser_path, name);
+    FILE *fp = fopen(full, "w");
+    if(fp){ fclose(fp); load_browser(G.browser_path); OK("Created %s", name); }
+    else ERR("Failed to create %s", name);
+}
+
+static void action_delete_file(void){
+    if(G.browser_count == 0) return;
+    BrowserFile *f = &G.browser_files[G.browser_sel];
+    if(strcmp(f->path, "..") == 0) return;
+    char full[1024]; snprintf(full, sizeof(full), "%s/%s", G.browser_path, f->path);
+    if(remove(full) == 0){ load_browser(G.browser_path); OK("Deleted %s", f->path); }
+    else ERR("Failed to delete %s", f->path);
+}
+
+static void menu_new_file(void){ prompt_start("New file name:", action_new_file, false); }
+static void menu_delete_file(void){ action_delete_file(); }
+
 static void action_stage(void){
     if(!G.file_count)return;
     GitFile *f=&G.files[G.file_sel];
@@ -2386,8 +2590,8 @@ static void handle_mouse(MouseEvt m){
             return;
         }
         if(G.ed_selecting){
-            G.ed_sel_end_y = G.editor.scroll_y + (m.row - (dtop+1));
-            G.ed_sel_end_x = m.col - (drx + 7) + G.editor.scroll_x;
+            G.ed_sel_end_y = CUR_ED.scroll_y + (m.row - (dtop+1));
+            G.ed_sel_end_x = m.col - (drx + 7) + CUR_ED.scroll_x;
             return;
         }
         if(G.selecting){
@@ -2439,8 +2643,8 @@ static void handle_mouse(MouseEvt m){
     if(cl && (G.current_view == VIEW_STATUS || G.current_view == VIEW_LOG) && m.col > drx && m.row > dtop && m.row < G.rows-1){
         if(G.editor_active){
             G.ed_selecting = true;
-            G.ed_sel_start_y = G.ed_sel_end_y = G.editor.scroll_y + (m.row - (dtop+1));
-            G.ed_sel_start_x = G.ed_sel_end_x = m.col - (drx + 7) + G.editor.scroll_x;
+            G.ed_sel_start_y = G.ed_sel_end_y = CUR_ED.scroll_y + (m.row - (dtop+1));
+            G.ed_sel_start_x = G.ed_sel_end_x = m.col - (drx + 7) + CUR_ED.scroll_x;
         } else {
             G.selecting = true;
             G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (dtop+1));
@@ -2558,13 +2762,29 @@ static void handle_mouse(MouseEvt m){
                     G.diff_sel = t;
                     DiffLine *dl = &G.diff_lines[t];
                     if(dl->type == 5){
-                        char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
-                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
-                        char *o = git_run(cmd);
-                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
-                        G.diff_is_summary = false;
-                        parse_diff(o?o:""); free(o);
+                        if(strncmp(G.diff_title, "Files:", 6) == 0){
+                            editor_load(dl->new_line);
+                            G.editor_active = true; G.focus = FOCUS_EDITOR;
+                        } else if(strncmp(G.diff_title, "Search:", 7) == 0){
+                            char lb[LINE_MAX_LEN]; snprintf(lb, sizeof(lb), "%s", dl->new_line);
+                            char *c1 = strchr(lb, ':');
+                            if(c1 && isdigit(c1[1])){
+                                *c1 = '\0';
+                                int lno = atoi(c1+1);
+                                editor_load(lb);
+                                CUR_ED.cur_y = imax(0, lno - 1);
+                                CUR_ED.cur_x = 0;
+                                G.editor_active = true; G.focus = FOCUS_EDITOR;
+                            }
+                        } else {
+                            char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                            const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
+                            char *o = git_run(cmd);
+                            snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                            G.diff_is_summary = false;
+                            parse_diff(o?o:""); free(o);
+                        }
                     }
                 }
             }
@@ -2616,6 +2836,39 @@ static void handle_mouse(MouseEvt m){
                 }
             }
         } else {
+            if(cl)G.focus=FOCUS_DIFF;
+            if(cl && G.diff_is_summary){
+                int t = G.diff_scroll + (m.row - (ct+lh));
+                if(t >= 0 && t < G.diff_count){
+                    G.diff_sel = t;
+                    DiffLine *dl = &G.diff_lines[t];
+                    if(dl->type == 5){
+                        if(strncmp(G.diff_title, "Files:", 6) == 0){
+                            editor_load(dl->new_line);
+                            G.editor_active = true; G.focus = FOCUS_EDITOR;
+                        } else if(strncmp(G.diff_title, "Search:", 7) == 0){
+                            char lb[LINE_MAX_LEN]; snprintf(lb, sizeof(lb), "%s", dl->new_line);
+                            char *c1 = strchr(lb, ':');
+                            if(c1 && isdigit(c1[1])){
+                                *c1 = '\0';
+                                int lno = atoi(c1+1);
+                                editor_load(lb);
+                                CUR_ED.cur_y = imax(0, lno - 1);
+                                CUR_ED.cur_x = 0;
+                                G.editor_active = true; G.focus = FOCUS_EDITOR;
+                            }
+                        } else {
+                            char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                            const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
+                            char *o = git_run(cmd);
+                            snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                            G.diff_is_summary = false;
+                            parse_diff(o?o:""); free(o);
+                        }
+                    }
+                }
+            }
             if(su)G.diff_scroll=imax(0,G.diff_scroll-3);
             if(sd)G.diff_scroll+=3;
         }
@@ -2649,13 +2902,13 @@ static void handle_mouse(MouseEvt m){
             }
         } else {
             if(cl) G.focus=FOCUS_EDITOR;
-            if(su) G.editor.cur_y=imax(0, G.editor.cur_y-3);
-            if(sd) G.editor.cur_y=imin(G.editor.line_count>0?G.editor.line_count-1:0, G.editor.cur_y+3);
+            if(su) CUR_ED.cur_y=imax(0, CUR_ED.cur_y-3);
+            if(sd) CUR_ED.cur_y=imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0, CUR_ED.cur_y+3);
             if(cl){
-                int ty = G.editor.scroll_y + (m.row - (ct+1));
-                if(ty >= 0 && ty < G.editor.line_count){
-                    G.editor.cur_y = ty;
-                    G.editor.cur_x = iclamp(m.col - (G.rx + 7) + G.editor.scroll_x, 0, (int)strlen(G.editor.lines[ty]));
+                int ty = CUR_ED.scroll_y + (m.row - (ct+1));
+                if(ty >= 0 && ty < CUR_ED.line_count){
+                    CUR_ED.cur_y = ty;
+                    CUR_ED.cur_x = iclamp(m.col - (G.rx + 7) + CUR_ED.scroll_x, 0, (int)strlen(CUR_ED.lines[ty]));
                 }
             }
         }
@@ -2692,63 +2945,97 @@ static void action_copy_selection(void){
 }
 
 static void editor_insert_char(char c){
-    if(G.editor.line_count == 0){
-        G.editor.lines = realloc(G.editor.lines, sizeof(char*) * 128);
-        G.editor.line_cap = 128;
-        G.editor.lines[G.editor.line_count++] = strdup("");
+    if(CUR_ED.line_count == 0){
+        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * 128);
+        CUR_ED.line_cap = 128;
+        CUR_ED.lines[CUR_ED.line_count++] = strdup("");
     }
-    char *line = G.editor.lines[G.editor.cur_y];
+    char *line = CUR_ED.lines[CUR_ED.cur_y];
     int len = (int)strlen(line);
     char *n = malloc(len + 2);
-    memcpy(n, line, G.editor.cur_x);
-    n[G.editor.cur_x] = c;
-    memcpy(n + G.editor.cur_x + 1, line + G.editor.cur_x, len - G.editor.cur_x + 1);
+    memcpy(n, line, CUR_ED.cur_x);
+    n[CUR_ED.cur_x] = c;
+    memcpy(n + CUR_ED.cur_x + 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x + 1);
     free(line);
-    G.editor.lines[G.editor.cur_y] = n;
-    G.editor.cur_x++;
-    G.editor.modified = true;
+    CUR_ED.lines[CUR_ED.cur_y] = n;
+    CUR_ED.cur_x++;
+    CUR_ED.modified = true;
 }
 
 static void editor_backspace(void){
-    if(G.editor.cur_x > 0){
-        char *line = G.editor.lines[G.editor.cur_y];
+    if(CUR_ED.cur_x > 0){
+        char *line = CUR_ED.lines[CUR_ED.cur_y];
         int len = (int)strlen(line);
-        memmove(line + G.editor.cur_x - 1, line + G.editor.cur_x, len - G.editor.cur_x + 1);
-        G.editor.cur_x--;
-        G.editor.modified = true;
-    } else if(G.editor.cur_y > 0){
+        memmove(line + CUR_ED.cur_x - 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x + 1);
+        CUR_ED.cur_x--;
+        CUR_ED.modified = true;
+    } else if(CUR_ED.cur_y > 0){
         /* Merge with previous line */
-        char *prev = G.editor.lines[G.editor.cur_y - 1];
-        char *curr = G.editor.lines[G.editor.cur_y];
+        char *prev = CUR_ED.lines[CUR_ED.cur_y - 1];
+        char *curr = CUR_ED.lines[CUR_ED.cur_y];
         int plen = (int)strlen(prev);
         int clen = (int)strlen(curr);
         char *n = malloc(plen + clen + 1);
         memcpy(n, prev, plen);
         memcpy(n + plen, curr, clen + 1);
         free(prev); free(curr);
-        G.editor.lines[G.editor.cur_y - 1] = n;
-        for(int i=G.editor.cur_y; i<G.editor.line_count-1; i++) G.editor.lines[i] = G.editor.lines[i+1];
-        G.editor.line_count--;
-        G.editor.cur_y--;
-        G.editor.cur_x = plen;
-        G.editor.modified = true;
+        CUR_ED.lines[CUR_ED.cur_y - 1] = n;
+        for(int i=CUR_ED.cur_y; i<CUR_ED.line_count-1; i++) CUR_ED.lines[i] = CUR_ED.lines[i+1];
+        CUR_ED.line_count--;
+        CUR_ED.cur_y--;
+        CUR_ED.cur_x = plen;
+        CUR_ED.modified = true;
     }
 }
 
 static void editor_newline(void){
-    char *line = G.editor.lines[G.editor.cur_y];
-    char *next = strdup(line + G.editor.cur_x);
-    line[G.editor.cur_x] = '\0';
-    if(G.editor.line_count >= G.editor.line_cap){
-        G.editor.line_cap *= 2;
-        G.editor.lines = realloc(G.editor.lines, sizeof(char*) * G.editor.line_cap);
+    char *line = CUR_ED.lines[CUR_ED.cur_y];
+    char *next = strdup(line + CUR_ED.cur_x);
+    line[CUR_ED.cur_x] = '\0';
+    if(CUR_ED.line_count >= CUR_ED.line_cap){
+        CUR_ED.line_cap = CUR_ED.line_cap ? CUR_ED.line_cap * 2 : 128;
+        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * CUR_ED.line_cap);
     }
-    for(int i=G.editor.line_count; i > G.editor.cur_y + 1; i--) G.editor.lines[i] = G.editor.lines[i-1];
-    G.editor.lines[G.editor.cur_y + 1] = next;
-    G.editor.line_count++;
-    G.editor.cur_y++;
-    G.editor.cur_x = 0;
-    G.editor.modified = true;
+    for(int i=CUR_ED.line_count; i > CUR_ED.cur_y + 1; i--) CUR_ED.lines[i] = CUR_ED.lines[i-1];
+    CUR_ED.lines[CUR_ED.cur_y + 1] = next;
+    CUR_ED.line_count++;
+    CUR_ED.cur_y++;
+    CUR_ED.cur_x = 0;
+    CUR_ED.modified = true;
+}
+
+static void editor_goto_line(const char *lstr){
+    int l = atoi(lstr);
+    if(l > 0 && l <= CUR_ED.line_count){
+        CUR_ED.cur_y = l - 1;
+        CUR_ED.cur_x = 0;
+        OK("Jumped to line %d", l);
+    } else ERR("Invalid line number");
+}
+
+static void editor_find(const char *pattern){
+    if(!pattern || !pattern[0]) return;
+    for(int i=CUR_ED.cur_y; i<CUR_ED.line_count; i++){
+        char *line = CUR_ED.lines[i];
+        char *pos = strstr(i == CUR_ED.cur_y ? line + CUR_ED.cur_x + 1 : line, pattern);
+        if(pos){
+            CUR_ED.cur_y = i;
+            CUR_ED.cur_x = (int)(pos - line);
+            OK("Found: %s", pattern);
+            return;
+        }
+    }
+    for(int i=0; i<CUR_ED.cur_y; i++){
+        char *line = CUR_ED.lines[i];
+        char *pos = strstr(line, pattern);
+        if(pos){
+            CUR_ED.cur_y = i;
+            CUR_ED.cur_x = (int)(pos - line);
+            OK("Found (wrapped): %s", pattern);
+            return;
+        }
+    }
+    ERR("Not found: %s", pattern);
 }
 
 static void editor_paste(void){
@@ -2770,8 +3057,8 @@ static void action_copy_editor_selection(void){
     size_t cap = 1024, len = 0;
     G.clipboard = malloc(cap);
     for(int y = sy; y <= ey; y++){
-        if(y < 0 || y >= G.editor.line_count) continue;
-        const char *line = G.editor.lines[y];
+        if(y < 0 || y >= CUR_ED.line_count) continue;
+        const char *line = CUR_ED.lines[y];
         int line_len = (int)strlen(line);
         int start_x = (y == sy) ? sx : 0;
         int end_x = (y == ey) ? ex : line_len - 1;
@@ -2932,8 +3219,17 @@ static void handle_key(Key k){
         return; 
     }
     if(k.type==KEY_CTRL_R || k.type==KEY_CTRL_L) { reload_all(); return; }
-    if(k.type==KEY_CTRL_P) { action_push(); return; }
-    if(k.type==KEY_CTRL_F) { action_pull(); return; }
+    if(k.type==KEY_CTRL_P) { prompt_start("Go to File:", action_find_file, false); return; }
+    if(k.type==KEY_CTRL_F) { 
+        if(G.focus == FOCUS_EDITOR) prompt_start("Find:", editor_find, false);
+        else action_pull(); 
+        return; 
+    }
+    if(k.type==KEY_CTRL_K) { prompt_start("Global Search (grep):", action_grep, false); return; }
+    if(k.type==KEY_CTRL_G) { 
+        if(G.focus == FOCUS_EDITOR) prompt_start("Go to line:", editor_goto_line, false);
+        return; 
+    }
     if(k.type==KEY_CTRL_S) { if(G.current_view==VIEW_STATUS && G.focus==FOCUS_CHANGES) action_stage(); return; }
     if(k.type==KEY_CTRL_Q) { G.running=false; return; }
     if(k.type==KEY_ESC){
@@ -2982,20 +3278,37 @@ static void handle_key(Key k){
                 else { editor_load(next); G.editor_active=true; G.focus=FOCUS_EDITOR; }
                 break;
             }
+            case KEY_CHAR:
+                if(k.ch == 'm'){
+                    menu_reset(G.sidebar_w+2, G.browser_sel - G.browser_scroll + 3);
+                    menu_add_item("New File", menu_new_file);
+                    menu_add_item("Delete", menu_delete_file);
+                    menu_add_item("Cancel", NULL);
+                }
+                break;
             default: break;
             }
             return;
         }
         if(G.focus == FOCUS_EDITOR){
             switch(k.type){
-            case KEY_UP:   G.editor.cur_y = imax(0, G.editor.cur_y-1); break;
-            case KEY_DOWN: G.editor.cur_y = imin(G.editor.line_count>0?G.editor.line_count-1:0, G.editor.cur_y+1); break;
-            case KEY_LEFT: G.editor.cur_x = imax(0, G.editor.cur_x-1); break;
-            case KEY_RIGHT:G.editor.cur_x = imin(G.editor.lines[G.editor.cur_y] ? (int)strlen(G.editor.lines[G.editor.cur_y]) : 0, G.editor.cur_x+1); break;
+            case KEY_UP:
+                CUR_ED.cur_y = imax(0, CUR_ED.cur_y-1);
+                CUR_ED.cur_x = imin(CUR_ED.cur_x, CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0);
+                break;
+            case KEY_DOWN:
+                CUR_ED.cur_y = imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0, CUR_ED.cur_y+1);
+                CUR_ED.cur_x = imin(CUR_ED.cur_x, CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0);
+                break;
+            case KEY_LEFT: CUR_ED.cur_x = imax(0, CUR_ED.cur_x-1); break;
+            case KEY_RIGHT:CUR_ED.cur_x = imin(CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0, CUR_ED.cur_x+1); break;
             case KEY_ENTER:editor_newline(); break;
             case KEY_BACKSPACE:editor_backspace(); break;
             case KEY_CTRL_S:editor_save(); break;
             case KEY_CTRL_V:editor_paste(); break;
+            case KEY_CTRL_W:editor_close_tab(); break;
+            case KEY_F1: editor_prev_tab(); break;
+            case KEY_F2: editor_next_tab(); break;
             case KEY_CHAR: editor_insert_char(k.ch); break;
             default: break;
             }
@@ -3148,13 +3461,29 @@ static void handle_key(Key k){
                 if(G.diff_is_summary && G.diff_count > 0){
                     DiffLine *dl = &G.diff_lines[G.diff_sel];
                     if(dl->type == 5){
-                        char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
-                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
-                        char *o = git_run(cmd);
-                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
-                        G.diff_is_summary = false;
-                        parse_diff(o?o:""); free(o);
+                        if(strncmp(G.diff_title, "Files:", 6) == 0){
+                            editor_load(dl->new_line);
+                            G.editor_active = true; G.focus = FOCUS_EDITOR;
+                        } else if(strncmp(G.diff_title, "Search:", 7) == 0){
+                            char lb[LINE_MAX_LEN]; snprintf(lb, sizeof(lb), "%s", dl->new_line);
+                            char *c1 = strchr(lb, ':');
+                            if(c1 && isdigit(c1[1])){
+                                *c1 = '\0';
+                                int lno = atoi(c1+1);
+                                editor_load(lb);
+                                CUR_ED.cur_y = imax(0, lno - 1);
+                                CUR_ED.cur_x = 0;
+                                G.editor_active = true; G.focus = FOCUS_EDITOR;
+                            }
+                        } else {
+                            char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                            const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
+                            char *o = git_run(cmd);
+                            snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                            G.diff_is_summary = false;
+                            parse_diff(o?o:""); free(o);
+                        }
                     }
                 }
                 break;
@@ -3267,13 +3596,29 @@ static void handle_key(Key k){
                 if(G.diff_is_summary && G.diff_count > 0){
                     DiffLine *dl = &G.diff_lines[G.diff_sel];
                     if(dl->type == 5){
-                        char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
-                        const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
-                        char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
-                        char *o = git_run(cmd);
-                        snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
-                        G.diff_is_summary = false;
-                        parse_diff(o?o:""); free(o);
+                        if(strncmp(G.diff_title, "Files:", 6) == 0){
+                            editor_load(dl->new_line);
+                            G.editor_active = true; G.focus = FOCUS_EDITOR;
+                        } else if(strncmp(G.diff_title, "Search:", 7) == 0){
+                            char lb[LINE_MAX_LEN]; snprintf(lb, sizeof(lb), "%s", dl->new_line);
+                            char *c1 = strchr(lb, ':');
+                            if(c1 && isdigit(c1[1])){
+                                *c1 = '\0';
+                                int lno = atoi(c1+1);
+                                editor_load(lb);
+                                CUR_ED.cur_y = imax(0, lno - 1);
+                                CUR_ED.cur_x = 0;
+                                G.editor_active = true; G.focus = FOCUS_EDITOR;
+                            }
+                        } else {
+                            char fpath[LINE_MAX_LEN]; snprintf(fpath, sizeof(fpath), "%s", dl->new_line);
+                            const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.diff_commit, fpath);
+                            char *o = git_run(cmd);
+                            snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.diff_commit, fpath);
+                            G.diff_is_summary = false;
+                            parse_diff(o?o:""); free(o);
+                        }
                     }
                 }
                 break;
@@ -3340,8 +3685,8 @@ static bool in_git_repo(void){
 
 int main(int argc, char **argv){
     (void)argc;(void)argv;
-    if(!isatty(STDIN_FILENO)||!isatty(STDOUT_FILENO)){fprintf(stderr,"gitui: requires a terminal\n");return 1;}
-    if(!in_git_repo()){fprintf(stderr,"gitui: not a git repository\n");return 1;}
+    if(!isatty(STDIN_FILENO)||!isatty(STDOUT_FILENO)){fprintf(stderr,"tuide: requires a terminal\n");return 1;}
+    if(!in_git_repo()){fprintf(stderr,"tuide: not a git repository\n");return 1;}
 
     memset(&G,0,sizeof(G));
     G.running=true; G.current_view=VIEW_STATUS; G.focus=FOCUS_CHANGES;
@@ -3369,7 +3714,7 @@ int main(int argc, char **argv){
     load_branch(); load_status(); load_log(); load_branches(); load_stash();
     update_diff();
 
-    OK("gitui v%s — Tab:focus  T:theme  V:vi-mode  s:side-by-side  ?:help  q:quit", VERSION);
+    OK("tuide v%s — Tab:focus  T:theme  V:vi-mode  s:side-by-side  ?:help  q:quit", VERSION);
 
     draw(); draw();
     while(G.running){
@@ -3386,6 +3731,6 @@ int main(int argc, char **argv){
     printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
     term_restore();
     free(G.front.cells); free(G.back.cells);
-    printf("gitui — bye!\n");
+    printf("tuide — bye!\n");
     return 0;
 }
