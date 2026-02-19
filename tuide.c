@@ -3605,14 +3605,17 @@ static void handle_mouse(MouseEvt m){
 
     if(cl && m.row == toggle_row && m.col > toggle_min_x){
         if(!G.editor_active){
-            int unify_x = G.cols - 15;
-            int hunk_x = G.cols - 7;
-            if(m.col >= unify_x && m.col < unify_x + 7){ G.diff_sidebyside = !G.diff_sidebyside; return; }
-            if(m.col >= hunk_x && m.col < hunk_x + 6){ G.diff_continuous = !G.diff_continuous; sync_graph_preview(); update_diff(); return; }
+            G.focus = FOCUS_DIFF;
+            int unify_x = G.cols - 16;
+            int hunk_x = G.cols - 8;
+            if(m.col >= unify_x && m.col < unify_x + 8){ G.diff_sidebyside = !G.diff_sidebyside; return; }
+            if(m.col >= hunk_x && m.col < hunk_x + 7){ G.diff_continuous = !G.diff_continuous; sync_graph_preview(); update_diff(); return; }
         } else {
+            G.focus = FOCUS_EDITOR;
             int save_x = G.cols - 8;
             if(m.col >= save_x && m.col < save_x + 6){ editor_save(); return; }
         }
+        return;
     }
 
     if(cl && m.row==1){
@@ -3899,8 +3902,8 @@ static void handle_mouse(MouseEvt m){
             }
         } else {
             if(cl)G.focus=FOCUS_DIFF;
-            if(cl && G.diff_is_summary){
-                int t = G.diff_scroll + (m.row - (ct+lh));
+            if(cl && G.diff_is_summary && m.row > ct+lh){
+                int t = G.diff_scroll + (m.row - (ct+lh+1));
                 if(t >= 0 && t < G.diff_count){
                     G.diff_sel = t;
                     DiffLine *dl = &G.diff_lines[t];
