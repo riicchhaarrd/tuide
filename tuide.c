@@ -524,7 +524,7 @@ static void ppad(const char *s,int w){
 }
 
 static void layout(void){
-    G.sidebar_w = 8;
+    G.sidebar_w = 10;
     if(G.lw_custom > 0) G.lw = iclamp(G.lw_custom, 20, G.cols-20);
     else G.lw=imax(26,imin(48,G.cols*32/100));
     
@@ -2046,7 +2046,7 @@ static Color get_token_color(const char *tok, bool is_comment){
         "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t"
     };
     for(int i=0; i<(int)(sizeof(kw)/sizeof(kw[0])); i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
-    if(isdigit(tok[0])) return TH->fg_accent2;
+    if(isdigit((unsigned char)tok[0])) return TH->fg_accent2;
     if(tok[0] == '"' || tok[0] == '\'') return TH->fg_unstaged;
     return TH->fg_normal;
 }
@@ -2134,7 +2134,7 @@ static void draw_editor(int top, int rx, int rw, int h){
         for(int j=0; j<=len && cur_c < rx+rw-1; j++){
             char c = line_buf[j];
             int real_j = j + start;
-            if(isspace(c) || ispunct(c) || c == '\0'){
+            if(isspace((unsigned char)c) || ispunct((unsigned char)c) || c == '\0'){
                 if(bi > 0){
                     buf[bi] = '\0';
                     bool selected = is_ed_selected(i, real_j - bi);
@@ -2200,13 +2200,13 @@ static void draw_sidebar(void){
     at(top+1, 1);
     bool explorer_act = G.browser_active;
     if(explorer_act){ cfg(TH->fg_bright); G.cur_bold=true; } else cfg(TH->fg_dim);
-    ppad(" BROWSE ", 8);
+    ppad(" BROWSER  ", 10);
     
     /* Source Control Icon (Git) */
     at(top+3, 1);
     bool git_act = !G.browser_active;
     if(git_act){ cfg(TH->fg_bright); G.cur_bold=true; } else cfg(TH->fg_dim);
-    ppad("  GIT   ", 8);
+    ppad("   GIT    ", 10);
     
     rst();
     /* Divider */
@@ -2912,6 +2912,7 @@ static void handle_mouse(MouseEvt m){
         if(sd)G.stash_sel=imin(G.stash_count>0?G.stash_count-1:0,G.stash_sel+1);
         if(cl){int t=m.row-ct-1;if(t>=0&&t<G.stash_count)G.stash_sel=t;}
     } else if(G.current_view==VIEW_EDITOR){
+        layout();
         if(m.col <= G.sidebar_w + G.lw){
             if(cl) G.focus=FOCUS_BROWSER;
             if(su) G.browser_sel=imax(0, G.browser_sel-1);
@@ -2985,7 +2986,8 @@ static void editor_insert_char(char c){
     char *n = malloc(len + 2);
     memcpy(n, line, CUR_ED.cur_x);
     n[CUR_ED.cur_x] = c;
-    memcpy(n + CUR_ED.cur_x + 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x + 1);
+    memcpy(n + CUR_ED.cur_x + 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x);
+    n[len + 1] = '\0';
     free(line);
     CUR_ED.lines[CUR_ED.cur_y] = n;
     CUR_ED.cur_x++;
@@ -3324,11 +3326,11 @@ static void handle_key(Key k){
             switch(k.type){
             case KEY_UP:
                 CUR_ED.cur_y = imax(0, CUR_ED.cur_y-1);
-                CUR_ED.cur_x = imin(CUR_ED.cur_x, CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0);
+                { int l=(int)strlen(CUR_ED.lines[CUR_ED.cur_y]); if(CUR_ED.cur_x > l) CUR_ED.cur_x = l; }
                 break;
             case KEY_DOWN:
                 CUR_ED.cur_y = imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0, CUR_ED.cur_y+1);
-                CUR_ED.cur_x = imin(CUR_ED.cur_x, CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0);
+                { int l=(int)strlen(CUR_ED.lines[CUR_ED.cur_y]); if(CUR_ED.cur_x > l) CUR_ED.cur_x = l; }
                 break;
             case KEY_LEFT: CUR_ED.cur_x = imax(0, CUR_ED.cur_x-1); break;
             case KEY_RIGHT:CUR_ED.cur_x = imin(CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0, CUR_ED.cur_x+1); break;
