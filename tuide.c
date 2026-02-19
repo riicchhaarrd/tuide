@@ -2194,20 +2194,55 @@ static void draw_browser(int top, int h){
     box_bot(top+h-1, sx, w, act);
 }
 
-static Color get_token_color(const char *tok, bool is_comment){
-    if(is_comment) return TH->fg_diff_ctx;
-    static const char *kw[] = {
+static Color get_token_color(const char *tok, bool is_comment, const char *ext){
+    if(is_comment) return TH->fg_accent3;
+    
+    static const char *c_kw[] = {
         "auto", "break", "case", "char", "const", "continue", "default", "do",
         "double", "else", "enum", "extern", "float", "for", "goto", "if",
         "int", "long", "register", "return", "short", "signed", "sizeof", "static",
         "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while",
-        "bool", "inline", "restrict", "#include", "#define", "#ifdef", "#ifndef", "#endif",
-        "#if", "#else", "#elif", "#pragma", "NULL", "true", "false", "size_t", "uint8_t",
-        "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t"
+        "bool", "inline", "restrict", "NULL", "true", "false", "size_t", "uint8_t",
+        "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t", "int32_t", "int64_t",
+        "uintptr_t", "intptr_t", "ssize_t", "off_t", "time_t", "FILE", "std", "string",
+        "vector", "map", "set", "unordered_map", "unordered_set", "class", "public",
+        "private", "protected", "template", "typename", "using", "namespace", "virtual",
+        "override", "final", "constexpr", "noexcept", "explicit", "mutable", "friend"
     };
-    for(int i=0; i<(int)(sizeof(kw)/sizeof(kw[0])); i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
+    static const char *js_kw[] = {
+        "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+        "delete", "do", "else", "export", "extends", "finally", "for", "function",
+        "if", "import", "in", "instanceof", "new", "return", "super", "switch",
+        "this", "throw", "try", "typeof", "var", "void", "while", "with", "yield",
+        "let", "static", "enum", "await", "async", "true", "false", "null", "undefined"
+    };
+    static const char *py_kw[] = {
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break",
+        "class", "continue", "def", "del", "elif", "else", "except", "finally",
+        "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
+        "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"
+    };
+
+    const char **kw = c_kw;
+    int kw_count = sizeof(c_kw)/sizeof(c_kw[0]);
+    
+    if(ext){
+        if(strcmp(ext, ".py") == 0) { kw = py_kw; kw_count = sizeof(py_kw)/sizeof(py_kw[0]); }
+        else if(strcmp(ext, ".js") == 0 || strcmp(ext, ".ts") == 0) { kw = js_kw; kw_count = sizeof(js_kw)/sizeof(js_kw[0]); }
+        else if(strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0 || strcmp(ext, ".h") == 0) { kw = c_kw; kw_count = sizeof(c_kw)/sizeof(c_kw[0]); }
+    }
+
+    if(tok[0] == '\'' || tok[0] == '"') return TH->fg_unstaged;
     if(isdigit((unsigned char)tok[0])) return TH->fg_accent2;
-    if(tok[0] == '"' || tok[0] == '\'') return TH->fg_unstaged;
+    if(tok[0] == '#') return TH->fg_accent1;
+
+    for(int i=0; i<kw_count; i++) if(strcmp(tok, kw[i]) == 0) return TH->fg_accent1;
+    
+    /* Check for types (simple heuristic) */
+    if(ext && (strcmp(ext, ".c")==0 || strcmp(ext, ".h")==0 || strcmp(ext, ".cpp")==0)){
+        if(strstr(tok, "_t") || (isupper(tok[0]) && strlen(tok) > 2)) return TH->fg_staged;
+    }
+
     return TH->fg_normal;
 }
 
@@ -2302,11 +2337,10 @@ static void draw_editor(int top, int rx, int rw, int h){
         char lno[16]; snprintf(lno, sizeof(lno), "%4d ", i+1); ppad(lno, 5);
         cfg(TH->fg_dim); ppad("│", 1);
         
-        /* Simple tokenizing for highlighting with scroll_x support */
+        /* Improved tokenizing for highlighting with scroll_x support */
         char *full_line = ed->lines[i];
         int full_len = (int)strlen(full_line);
         
-        /* Substring for current view */
         char line_buf[1024];
         int start = ed->scroll_x;
         int len = 0;
@@ -2317,38 +2351,65 @@ static void draw_editor(int top, int rx, int rw, int h){
         }
         line_buf[len] = '\0';
 
+        const char *ext = strrchr(t->path, '.');
         int cur_c = rx + 7;
-        bool in_comment = (strstr(full_line, "//") != NULL); 
-        int comment_start = in_comment ? (int)(strstr(full_line, "//") - full_line) : -1;
-
-        char buf[512]; int bi=0;
-        for(int j=0; j<=len && cur_c < rx+rw-3; j++){
-            char c = line_buf[j];
+        int j = 0;
+        while(j < len && cur_c < rx+rw-3){
             int real_j = j + start;
-            if(isspace((unsigned char)c) || ispunct((unsigned char)c) || c == '\0'){
-                if(bi > 0){
-                    buf[bi] = '\0';
-                    bool selected = is_ed_selected(i, real_j - bi);
-                    if(selected) cbg(TH->bg_sel);
-                    cfg(get_token_color(buf, in_comment && (comment_start <= real_j - bi)));
-                    at(row, cur_c - bi);
-                    ppad(buf, bi);
-                    if(selected) cbg(TH->bg_base);
-                    bi = 0;
+            char c = line_buf[j];
+            
+            // Comment
+            if((c == '/' && j+1 < len && line_buf[j+1] == '/') || (c == '#' && (ext && strcmp(ext, ".py")==0))){
+                cfg(TH->fg_accent3);
+                while(j < len && cur_c < rx+rw-3){
+                    if(is_ed_selected(i, j + start)) cbg(TH->bg_sel); else cbg(TH->bg_base);
+                    char cs[2] = {line_buf[j++], 0};
+                    put_cell(row, cur_c++, cs);
                 }
-                if(c != '\0'){
-                    at(row, cur_c);
-                    bool selected = is_ed_selected(i, real_j);
-                    if(selected) cbg(TH->bg_sel);
-                    cfg(TH->fg_dim);
-                    char cs[2] = {c, 0}; put_cell(row, cur_c, cs);
-                    if(selected) cbg(TH->bg_base);
-                    cur_c++;
-                }
-            } else {
-                buf[bi++] = c;
-                cur_c++;
+                break;
             }
+            
+            // String
+            if(c == '"' || c == '\''){
+                char quote = c;
+                cfg(TH->fg_unstaged);
+                if(is_ed_selected(i, j + start)) cbg(TH->bg_sel); else cbg(TH->bg_base);
+                char cs[2] = {line_buf[j++], 0};
+                put_cell(row, cur_c++, cs);
+                while(j < len && cur_c < rx+rw-3){
+                    if(is_ed_selected(i, j + start)) cbg(TH->bg_sel); else cbg(TH->bg_base);
+                    char sc = line_buf[j++];
+                    char scs[2] = {sc, 0};
+                    put_cell(row, cur_c++, scs);
+                    if(sc == quote && (j < 2 || line_buf[j-2] != '\\')) break;
+                }
+                continue;
+            }
+            
+            // Token
+            if(isalnum((unsigned char)c) || c == '_' || c == '#'){
+                char buf[256]; int bi = 0;
+                int tok_start = j;
+                while(j < len && (isalnum((unsigned char)line_buf[j]) || line_buf[j] == '_' || line_buf[j] == '#') && bi < 255){
+                    buf[bi++] = line_buf[j++];
+                }
+                buf[bi] = '\0';
+                Color tcol = get_token_color(buf, false, ext);
+                for(int k=0; k<bi; k++){
+                    if(cur_c >= rx+rw-3) break;
+                    if(is_ed_selected(i, tok_start + k + start)) cbg(TH->bg_sel); else cbg(TH->bg_base);
+                    cfg(tcol);
+                    char tcs[2] = {buf[k], 0};
+                    put_cell(row, cur_c++, tcs);
+                }
+                continue;
+            }
+            
+            // Punctuation / Space
+            if(is_ed_selected(i, j + start)) cbg(TH->bg_sel); else cbg(TH->bg_base);
+            cfg(ispunct((unsigned char)c) ? TH->fg_dim : TH->fg_normal);
+            char pcs[2] = {line_buf[j++], 0};
+            put_cell(row, cur_c++, pcs);
         }
 
         /* Cursor: solid block when focused, underline when not focused */

@@ -1,1 +1,2 @@
+#!/bin/bash
 cc -std=c99 -O2 -o tuide tuide.c
