@@ -524,7 +524,7 @@ static void ppad(const char *s,int w){
 }
 
 static void layout(void){
-    G.sidebar_w = 4;
+    G.sidebar_w = 8;
     if(G.lw_custom > 0) G.lw = iclamp(G.lw_custom, 20, G.cols-20);
     else G.lw=imax(26,imin(48,G.cols*32/100));
     
@@ -2200,13 +2200,13 @@ static void draw_sidebar(void){
     at(top+1, 1);
     bool explorer_act = G.browser_active;
     if(explorer_act){ cfg(TH->fg_bright); G.cur_bold=true; } else cfg(TH->fg_dim);
-    ppad(" EXP", 4);
+    ppad(" BROWSE ", 8);
     
     /* Source Control Icon (Git) */
     at(top+3, 1);
     bool git_act = !G.browser_active;
     if(git_act){ cfg(TH->fg_bright); G.cur_bold=true; } else cfg(TH->fg_dim);
-    ppad(" SRC", 4);
+    ppad("  GIT   ", 8);
     
     rst();
     /* Divider */
@@ -2248,6 +2248,10 @@ static void draw(void){
     }
     case VIEW_BRANCHES: draw_branches(ct,ch); break;
     case VIEW_STASH:    draw_stash(ct,ch);    break;
+    case VIEW_EDITOR:
+        draw_browser(ct, ch);
+        draw_editor(ct, G.rx, G.rw, ch);
+        break;
     case VIEW_HELP:     draw_help(ct,ch);     break;
     default: break;
     }
@@ -2610,7 +2614,7 @@ static void handle_mouse(MouseEvt m){
         return;
     }
 
-    if(cl && m.col < G.sidebar_w){
+    if(cl && m.col <= G.sidebar_w){
         if(m.row == ct+1){ G.browser_active = true; load_browser("."); G.focus = FOCUS_BROWSER; }
         else if(m.row == ct+3){ G.browser_active = false; G.focus = FOCUS_CHANGES; }
         return;
@@ -2645,6 +2649,10 @@ static void handle_mouse(MouseEvt m){
             G.ed_selecting = true;
             G.ed_sel_start_y = G.ed_sel_end_y = CUR_ED.scroll_y + (m.row - (dtop+1));
             G.ed_sel_start_x = G.ed_sel_end_x = m.col - (drx + 7) + CUR_ED.scroll_x;
+            if(G.ed_sel_start_y >= 0 && G.ed_sel_start_y < CUR_ED.line_count){
+                CUR_ED.cur_y = G.ed_sel_start_y;
+                CUR_ED.cur_x = iclamp(G.ed_sel_start_x, 0, (int)strlen(CUR_ED.lines[CUR_ED.cur_y]));
+            }
         } else {
             G.selecting = true;
             G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (dtop+1));
@@ -2699,57 +2707,79 @@ static void handle_mouse(MouseEvt m){
         bool in_top=(m.row>=ct&&m.row<ct+G.lh_chg);
         bool in_bot=(m.row>=ct+G.lh_chg);
 
-        if(in_l&&in_top){
-            if(cl)G.focus=FOCUS_CHANGES;
-            if(su)G.file_sel=imax(0,G.file_sel-1);
-            if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+1);
-            if(cl){
-                int row=m.row-(ct+1);
-                int vis=0;
-                for(int i=0;i<G.file_count;i++){
-                    if(G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
-                }
-                vis++; vis++;
-                for(int i=0;i<G.file_count;i++){
-                    if(!G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
-                }
-            }
-            update_diff();
-        } else if(in_l&&in_bot){
-            if(cl)G.focus=FOCUS_GRAPH;
-            int gvis=G.lh_gph-2;
-            if(su){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,gvis); sync_graph_preview(); }
-            if(sd){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,gvis); sync_graph_preview(); }
-            if(cl){
-                int row_idx = m.row - (ct + G.lh_chg + 1);
-                if(row_idx >= 0 && row_idx < G.graph_rows_count){
-                    int ci = G.graph_rows[row_idx].commit_idx;
-                    int fi = G.graph_rows[row_idx].file_idx;
-                    G.commit_sel = ci;
-                    if(fi == -1){
-                        int sx = G.sidebar_w + 1;
-                        if(m.col >= sx+1 && m.col <= sx+2) {
-                            G.commits[ci].expanded = !G.commits[ci].expanded;
-                            if(G.commits[ci].expanded) fetch_commit_files(ci);
+        if(in_l){
+            if(G.browser_active){
+                if(cl) G.focus=FOCUS_BROWSER;
+                if(su) G.browser_sel=imax(0, G.browser_sel-1);
+                if(sd) G.browser_sel=imin(G.browser_count>0?G.browser_count-1:0, G.browser_sel+1);
+                if(cl){
+                    int t = G.browser_scroll + (m.row - (ct+1));
+                    if(t >= 0 && t < G.browser_count){
+                        G.browser_sel = t;
+                        BrowserFile *f = &G.browser_files[t];
+                        if(f->is_dir){
+                            char next[1024]; snprintf(next, sizeof(next), "%s/%s", G.browser_path, f->path);
+                            load_browser(next); G.browser_sel = 0; G.browser_scroll = 0;
                         } else {
-                            G.graph_file_sel = -1;
-                            snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
-                            G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
+                            char full[1024]; snprintf(full, sizeof(full), "%s/%s", G.browser_path, f->path);
+                            editor_load(full); G.editor_active = true; G.focus = FOCUS_EDITOR;
                         }
-                    } else {
-                        G.graph_file_sel = fi;
-                        if(fi == 0) {
-                            snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
-                            G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
+                    }
+                }
+                return;
+            }
+            if(in_top){
+                if(cl)G.focus=FOCUS_CHANGES;
+                if(su)G.file_sel=imax(0,G.file_sel-1);
+                if(sd)G.file_sel=imin(G.file_count>0?G.file_count-1:0,G.file_sel+1);
+                if(cl){
+                    int row=m.row-(ct+1);
+                    int vis=0;
+                    for(int i=0;i<G.file_count;i++){
+                        if(G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
+                    }
+                    vis++; vis++;
+                    for(int i=0;i<G.file_count;i++){
+                        if(!G.files[i].staged){vis++; if(vis==row){G.file_sel=i;break;}}
+                    }
+                }
+                update_diff();
+            } else if(in_bot){
+                if(cl)G.focus=FOCUS_GRAPH;
+                int gvis=G.lh_gph-2;
+                if(su){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,gvis); sync_graph_preview(); }
+                if(sd){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,gvis); sync_graph_preview(); }
+                if(cl){
+                    int row_idx = m.row - (ct + G.lh_chg + 1);
+                    if(row_idx >= 0 && row_idx < G.graph_rows_count){
+                        int ci = G.graph_rows[row_idx].commit_idx;
+                        int fi = G.graph_rows[row_idx].file_idx;
+                        G.commit_sel = ci;
+                        if(fi == -1){
+                            int sx = G.sidebar_w + 1;
+                            if(m.col >= sx+1 && m.col <= sx+2) {
+                                G.commits[ci].expanded = !G.commits[ci].expanded;
+                                if(G.commits[ci].expanded) fetch_commit_files(ci);
+                            } else {
+                                G.graph_file_sel = -1;
+                                snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
+                                G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
+                            }
                         } else {
-                            char *fpath = G.commits[ci].files[fi];
-                            const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
-                            char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.commits[ci].hash, fpath);
-                            char *o = git_run(cmd);
-                            snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.commits[ci].hash, fpath);
-                            G.diff_is_summary = false;
-                            snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", G.commits[ci].hash);
-                            parse_diff(o?o:""); free(o);
+                            G.graph_file_sel = fi;
+                            if(fi == 0) {
+                                snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
+                                G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
+                            } else {
+                                char *fpath = G.commits[ci].files[fi];
+                                const char *ctx_ = G.diff_continuous ? "-U1000" : "-U3";
+                                char cmd[1024]; snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, G.commits[ci].hash, fpath);
+                                char *o = git_run(cmd);
+                                snprintf(G.diff_title, sizeof(G.diff_title), "commit %s: %s", G.commits[ci].hash, fpath);
+                                G.diff_is_summary = false;
+                                snprintf(G.diff_commit, sizeof(G.diff_commit), "%s", G.commits[ci].hash);
+                                parse_diff(o?o:""); free(o);
+                            }
                         }
                     }
                 }
@@ -2882,7 +2912,7 @@ static void handle_mouse(MouseEvt m){
         if(sd)G.stash_sel=imin(G.stash_count>0?G.stash_count-1:0,G.stash_sel+1);
         if(cl){int t=m.row-ct-1;if(t>=0&&t<G.stash_count)G.stash_sel=t;}
     } else if(G.current_view==VIEW_EDITOR){
-        if(m.col <= G.lw){
+        if(m.col <= G.sidebar_w + G.lw){
             if(cl) G.focus=FOCUS_BROWSER;
             if(su) G.browser_sel=imax(0, G.browser_sel-1);
             if(sd) G.browser_sel=imin(G.browser_count>0?G.browser_count-1:0, G.browser_sel+1);
