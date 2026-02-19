@@ -1998,7 +1998,88 @@ static void action_grep(const char *pattern){
 static void editor_free(Editor *ed){
     for(int i=0; i<ed->line_count; i++) free(ed->lines[i]);
     free(ed->lines);
+    for(int i=0; i<ed->undo_top; i++) free(ed->undo_stack[i].text);
+    for(int i=0; i<ed->redo_top; i++) free(ed->redo_stack[i].text);
     memset(ed, 0, sizeof(Editor));
+}
+
+/* Build a single flat string from all lines (joined with '\n') */
+static char *editor_snapshot_text(Editor *ed){
+    size_t total = 1;
+    for(int i=0; i<ed->line_count; i++) total += strlen(ed->lines[i]) + 1;
+    char *buf = malloc(total);
+    size_t pos = 0;
+    for(int i=0; i<ed->line_count; i++){
+        size_t l = strlen(ed->lines[i]);
+        memcpy(buf+pos, ed->lines[i], l); pos += l;
+        buf[pos++] = '\n';
+    }
+    buf[pos] = '\0';
+    return buf;
+}
+
+/* Restore editor lines from a flat snapshot string */
+static void editor_restore_snapshot(Editor *ed, const char *text, int cy, int cx){
+    for(int i=0; i<ed->line_count; i++) free(ed->lines[i]);
+    ed->line_count = 0;
+    const char *p = text;
+    while(*p){
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl-p) : strlen(p);
+        if(ed->line_count >= ed->line_cap){
+            ed->line_cap = ed->line_cap ? ed->line_cap*2 : 128;
+            ed->lines = realloc(ed->lines, sizeof(char*)*ed->line_cap);
+        }
+        char *line = malloc(len+1);
+        memcpy(line, p, len); line[len] = '\0';
+        ed->lines[ed->line_count++] = line;
+        p = nl ? nl+1 : p+len;
+    }
+    if(ed->line_count == 0){
+        if(ed->line_cap == 0){ ed->line_cap=128; ed->lines=malloc(sizeof(char*)*128); }
+        ed->lines[ed->line_count++] = strdup("");
+    }
+    ed->cur_y = iclamp(cy, 0, ed->line_count-1);
+    ed->cur_x = iclamp(cx, 0, (int)strlen(ed->lines[ed->cur_y]));
+    ed->modified = true;
+}
+
+/* Push current state onto undo stack, clear redo */
+static void editor_push_undo(Editor *ed){
+    /* Clear redo */
+    for(int i=0; i<ed->redo_top; i++) free(ed->redo_stack[i].text);
+    ed->redo_top = 0;
+    /* Push to undo (drop oldest if full) */
+    if(ed->undo_top == MAX_UNDO){
+        free(ed->undo_stack[0].text);
+        memmove(&ed->undo_stack[0], &ed->undo_stack[1], (MAX_UNDO-1)*sizeof(HistEntry));
+        ed->undo_top--;
+    }
+    ed->undo_stack[ed->undo_top++] = (HistEntry){editor_snapshot_text(ed), ed->cur_y, ed->cur_x};
+}
+
+static void editor_undo(Editor *ed){
+    if(ed->undo_top == 0){ OK("Nothing to undo"); return; }
+    /* Save current to redo */
+    if(ed->redo_top < MAX_UNDO)
+        ed->redo_stack[ed->redo_top++] = (HistEntry){editor_snapshot_text(ed), ed->cur_y, ed->cur_x};
+    /* Restore previous */
+    HistEntry e = ed->undo_stack[--ed->undo_top];
+    editor_restore_snapshot(ed, e.text, e.cy, e.cx);
+    free(e.text);
+    OK("Undo");
+}
+
+static void editor_redo(Editor *ed){
+    if(ed->redo_top == 0){ OK("Nothing to redo"); return; }
+    /* Save current to undo */
+    if(ed->undo_top < MAX_UNDO)
+        ed->undo_stack[ed->undo_top++] = (HistEntry){editor_snapshot_text(ed), ed->cur_y, ed->cur_x};
+    /* Restore next */
+    HistEntry e = ed->redo_stack[--ed->redo_top];
+    editor_restore_snapshot(ed, e.text, e.cy, e.cx);
+    free(e.text);
+    OK("Redo");
 }
 
 static void editor_load(const char *path){
@@ -2656,31 +2737,39 @@ static void msel(int *sel,int *scr,int cnt,int d,int vis, bool is_graph){
     }
 }
 
-static void editor_insert_char(char c){
+static void editor_ensure_line(void){
     if(CUR_ED.line_count == 0){
-        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * 128);
-        CUR_ED.line_cap = 128;
+        if(CUR_ED.line_cap == 0){ CUR_ED.line_cap=128; CUR_ED.lines=malloc(sizeof(char*)*128); }
         CUR_ED.lines[CUR_ED.line_count++] = strdup("");
     }
+}
+
+static void editor_insert_char(char c){
+    editor_push_undo(&G.tabs[G.tab_current].ed);
+    editor_ensure_line();
     char *line = CUR_ED.lines[CUR_ED.cur_y];
     int len = (int)strlen(line);
+    int cx = iclamp(CUR_ED.cur_x, 0, len);
     char *n = malloc(len + 2);
-    memcpy(n, line, CUR_ED.cur_x);
-    n[CUR_ED.cur_x] = c;
-    memcpy(n + CUR_ED.cur_x + 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x);
-    n[len + 1] = '\0';
+    memcpy(n, line, cx);
+    n[cx] = c;
+    memcpy(n + cx + 1, line + cx, len - cx + 1); /* includes null */
     free(line);
     CUR_ED.lines[CUR_ED.cur_y] = n;
-    CUR_ED.cur_x++;
+    CUR_ED.cur_x = cx + 1;
     CUR_ED.modified = true;
 }
 
 static void editor_backspace(void){
-    if(CUR_ED.cur_x > 0){
-        char *line = CUR_ED.lines[CUR_ED.cur_y];
-        int len = (int)strlen(line);
-        memmove(line + CUR_ED.cur_x - 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x + 1);
-        CUR_ED.cur_x--;
+    if(CUR_ED.line_count == 0) return;
+    if(CUR_ED.cur_y >= CUR_ED.line_count) CUR_ED.cur_y = CUR_ED.line_count - 1;
+    editor_push_undo(&G.tabs[G.tab_current].ed);
+    char *line = CUR_ED.lines[CUR_ED.cur_y];
+    int len = (int)strlen(line);
+    int cx = iclamp(CUR_ED.cur_x, 0, len);
+    if(cx > 0){
+        memmove(line + cx - 1, line + cx, len - cx + 1);
+        CUR_ED.cur_x = cx - 1;
         CUR_ED.modified = true;
     } else if(CUR_ED.cur_y > 0){
         char *prev = CUR_ED.lines[CUR_ED.cur_y - 1];
@@ -2700,10 +2789,39 @@ static void editor_backspace(void){
     }
 }
 
-static void editor_newline(void){
+/* Delete the character AT the cursor (forward delete) */
+static void editor_delete_forward(void){
+    if(CUR_ED.line_count == 0) return;
+    editor_push_undo(&G.tabs[G.tab_current].ed);
     char *line = CUR_ED.lines[CUR_ED.cur_y];
-    char *next = strdup(line + CUR_ED.cur_x);
-    line[CUR_ED.cur_x] = '\0';
+    int len = (int)strlen(line);
+    int cx = iclamp(CUR_ED.cur_x, 0, len);
+    if(cx < len){
+        memmove(line + cx, line + cx + 1, len - cx);
+        CUR_ED.modified = true;
+    } else if(CUR_ED.cur_y < CUR_ED.line_count - 1){
+        /* Merge current line with next */
+        char *next = CUR_ED.lines[CUR_ED.cur_y + 1];
+        int nlen = (int)strlen(next);
+        char *n = malloc(len + nlen + 1);
+        memcpy(n, line, len);
+        memcpy(n + len, next, nlen + 1);
+        free(line); free(next);
+        CUR_ED.lines[CUR_ED.cur_y] = n;
+        for(int i=CUR_ED.cur_y+1; i<CUR_ED.line_count-1; i++) CUR_ED.lines[i] = CUR_ED.lines[i+1];
+        CUR_ED.line_count--;
+        CUR_ED.modified = true;
+    }
+}
+
+static void editor_newline(void){
+    editor_ensure_line();
+    editor_push_undo(&G.tabs[G.tab_current].ed);
+    char *line = CUR_ED.lines[CUR_ED.cur_y];
+    int len = (int)strlen(line);
+    int cx = iclamp(CUR_ED.cur_x, 0, len);
+    char *next = strdup(line + cx);
+    line[cx] = '\0';
     if(CUR_ED.line_count >= CUR_ED.line_cap){
         CUR_ED.line_cap = CUR_ED.line_cap ? CUR_ED.line_cap * 2 : 128;
         CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * CUR_ED.line_cap);
@@ -2752,10 +2870,34 @@ static void editor_find(const char *pattern){
 
 static void editor_paste(void){
     if(!G.clipboard) return;
+    /* Push one undo entry for the whole paste, then insert directly without per-char undo */
+    editor_push_undo(&G.tabs[G.tab_current].ed);
+    editor_ensure_line();
     for(int i=0; G.clipboard[i]; i++){
-        if(G.clipboard[i] == '\n') editor_newline();
-        else editor_insert_char(G.clipboard[i]);
+        char c = G.clipboard[i];
+        if(c == '\n'){
+            /* newline inline (no extra undo push) */
+            char *line = CUR_ED.lines[CUR_ED.cur_y];
+            int len = (int)strlen(line);
+            int cx = iclamp(CUR_ED.cur_x, 0, len);
+            char *next = strdup(line + cx);
+            line[cx] = '\0';
+            if(CUR_ED.line_count >= CUR_ED.line_cap){
+                CUR_ED.line_cap = CUR_ED.line_cap ? CUR_ED.line_cap*2 : 128;
+                CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*)*CUR_ED.line_cap);
+            }
+            for(int j=CUR_ED.line_count; j>CUR_ED.cur_y+1; j--) CUR_ED.lines[j]=CUR_ED.lines[j-1];
+            CUR_ED.lines[CUR_ED.cur_y+1]=next; CUR_ED.line_count++; CUR_ED.cur_y++; CUR_ED.cur_x=0;
+        } else {
+            char *line = CUR_ED.lines[CUR_ED.cur_y];
+            int len = (int)strlen(line);
+            int cx = iclamp(CUR_ED.cur_x, 0, len);
+            char *n = malloc(len + 2);
+            memcpy(n, line, cx); n[cx]=c; memcpy(n+cx+1, line+cx, len-cx+1);
+            free(line); CUR_ED.lines[CUR_ED.cur_y]=n; CUR_ED.cur_x=cx+1;
+        }
     }
+    CUR_ED.modified = true;
 }
 
 static void action_copy_editor_selection(void){
@@ -2787,29 +2929,43 @@ static void action_copy_editor_selection(void){
 
 static void editor_delete_selection(void){
     if(!G.ed_selecting) return;
+    if(CUR_ED.line_count == 0){ G.ed_selecting = false; return; }
     int sy = G.ed_sel_start_y, sx = G.ed_sel_start_x;
     int ey = G.ed_sel_end_y, ex = G.ed_sel_end_x;
+    /* Normalise so sy,sx <= ey,ex */
     if(sy > ey || (sy == ey && sx > ex)){ int t=sy; sy=ey; ey=t; t=sx; sx=ex; ex=t; }
-    if(sy < 0) sy = 0; if(ey >= CUR_ED.line_count) ey = CUR_ED.line_count - 1;
+    /* Clamp rows to valid range */
+    sy = iclamp(sy, 0, CUR_ED.line_count - 1);
+    ey = iclamp(ey, 0, CUR_ED.line_count - 1);
+    editor_push_undo(&G.tabs[G.tab_current].ed);
     if(sy == ey){
         char *line = CUR_ED.lines[sy];
         int len = (int)strlen(line);
-        if(sx < 0) sx = 0; if(ex >= len) ex = len - 1;
-        memmove(line + sx, line + ex + 1, len - ex);
+        sx = iclamp(sx, 0, len);
+        ex = iclamp(ex, sx, len);
+        /* Remove chars [sx, ex) */
+        memmove(line + sx, line + ex, len - ex + 1);
     } else {
         char *start_line = CUR_ED.lines[sy];
-        char *end_line = CUR_ED.lines[ey];
-        int start_len = (int)strlen(start_line);
-        int end_len = (int)strlen(end_line);
-        char *n = malloc(sx + (end_len - ex) + 1);
+        char *end_line   = CUR_ED.lines[ey];
+        int s_len = (int)strlen(start_line);
+        int e_len = (int)strlen(end_line);
+        sx = iclamp(sx, 0, s_len);
+        ex = iclamp(ex, 0, e_len);
+        /* tail = chars from ex onwards on the end line */
+        int tail = e_len - ex;
+        if(tail < 0) tail = 0;
+        char *n = malloc(sx + tail + 1);
         memcpy(n, start_line, sx);
-        memcpy(n + sx, end_line + ex + 1, end_len - ex);
-        n[sx + end_len - ex] = '\0';
+        if(tail > 0) memcpy(n + sx, end_line + ex, tail);
+        n[sx + tail] = '\0';
         free(CUR_ED.lines[sy]);
         CUR_ED.lines[sy] = n;
+        int removed = ey - sy; /* lines sy+1 .. ey */
         for(int i = sy + 1; i <= ey; i++) free(CUR_ED.lines[i]);
-        for(int i = sy + 1; i < CUR_ED.line_count - (ey - sy); i++) CUR_ED.lines[i] = CUR_ED.lines[i + (ey - sy)];
-        CUR_ED.line_count -= (ey - sy);
+        for(int i = sy + 1; i < CUR_ED.line_count - removed; i++)
+            CUR_ED.lines[i] = CUR_ED.lines[i + removed];
+        CUR_ED.line_count -= removed;
     }
     CUR_ED.cur_y = sy; CUR_ED.cur_x = sx;
     G.ed_selecting = false; CUR_ED.modified = true;
@@ -3410,14 +3566,16 @@ static void handle_key(Key k){
             else editor_backspace(); break;
         case KEY_DEL:
             if(G.ed_selecting) editor_delete_selection();
-            else { CUR_ED.cur_x++; editor_backspace(); } break;
+            else editor_delete_forward(); break;
         case KEY_CTRL_S:editor_save(); break;
         case KEY_CTRL_V:editor_paste(); break;
         case KEY_CTRL_X:editor_cut_selection(); break;
+        case KEY_CTRL_Z:editor_undo(&G.tabs[G.tab_current].ed); break;
+        case KEY_CTRL_Y:editor_redo(&G.tabs[G.tab_current].ed); break;
         case KEY_CTRL_W:editor_close_tab(); break;
         case KEY_F1: editor_prev_tab(); break;
         case KEY_F2: editor_next_tab(); break;
-        case KEY_CHAR: 
+        case KEY_CHAR:
             if(G.ed_selecting) editor_delete_selection();
             editor_insert_char(k.ch); break;
         case KEY_ESC: G.ed_selecting = false; G.focus = (G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES); break;
