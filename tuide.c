@@ -310,6 +310,7 @@ typedef struct {
     int  col_hash_w, col_author_w, col_date_w;
     int  sc_y, sc_h, sc_total, sc_vis, sc_drag_offset;
     int  tab_x[7];
+    int  ed_tab_x[MAX_TABS+1]; /* Editor tab bar click positions */
 
     /* Context Menu */
     bool menu_active;
@@ -564,6 +565,7 @@ static void sig_int(int s){(void)s;G.running=false;}
 /* ================================================================
    DATA LOADING
 ================================================================ */
+static void fetch_commit_files(int idx); /* forward declaration */
 static void load_branch(void){
     char *o=git_run("git rev-parse --abbrev-ref HEAD 2>/dev/null");
     if(o){strtrim(o);snprintf(G.branch_name,sizeof(G.branch_name),"%s",o);free(o);}
@@ -870,6 +872,11 @@ static void sync_graph_preview(void){
 
 static void reload_all(void){
     load_branch(); load_status(); load_log(); load_branches(); load_stash();
+    /* Auto-expand the currently selected commit in the graph */
+    if(G.commit_count > 0){
+        G.commits[G.commit_sel].expanded = true;
+        fetch_commit_files(G.commit_sel);
+    }
     update_diff(); OK("Refreshed");
 }
 
@@ -1109,14 +1116,14 @@ static void draw_statusbar(void){
         if(G.focus==FOCUS_CHANGES) hint="e:edit  SPC:stage  a:stage-all  u:unstage  d:discard  ↵:diff  c:commit  P:push  f:pull  T:theme";
         else if(G.focus==FOCUS_GRAPH) hint="e:edit  ↑/↓:move  ↵:diff  Home/End:top/bot  T:theme";
         else if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open  ←:back  b:close";
-        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Enter:newline  BS:delete  Ctrl+S:save  Ctrl+V:paste  e:close";
+        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  e:toggle diff";
         else hint="↑/↓:scroll  [/]:hscroll  s:side-by-side  q:back  T:theme";
     } else if(G.current_view==VIEW_LOG) hint="e:edit  ↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
     else if(G.current_view==VIEW_EDITOR) {
         if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open/enter  ←:back  Tab:editor";
-        else hint="Arrows:move  Enter:newline  BS:delete  Ctrl+S:save  Ctrl+V:paste  f:files";
+        else hint="Arrows:move  Shift+Arrows:select  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  f:files";
     }
     else if(G.current_view==VIEW_HELP) hint="q:close help";
     
@@ -2155,9 +2162,9 @@ static void draw_editor(int top, int rx, int rw, int h){
         int tab_w = snprintf(tbuf, sizeof(tbuf), "  %s%s  ", fname, G.tabs[i].ed.modified?"*":"");
         ppad(tbuf, tab_w);
         
-        /* Save tab boundaries for clicking */
-        if(i < 7) G.tab_x[i] = cur_tab_x;
-        if(i == G.tab_count - 1 && i+1 < 7) G.tab_x[i+1] = cur_tab_x + tab_w;
+        /* Save tab boundaries for clicking (separate from view tab_x) */
+        G.ed_tab_x[i] = cur_tab_x;
+        if(i == G.tab_count - 1) G.ed_tab_x[i+1] = cur_tab_x + tab_w;
 
         cur_tab_x += tab_w;
         if(!cur) { cfg(TH->fg_dim); put_cell(top+1, cur_tab_x-1, "│"); }
@@ -2227,15 +2234,21 @@ static void draw_editor(int top, int rx, int rw, int h){
             }
         }
 
-        if(act && i == ed->cur_y){
+        /* Cursor: solid block when focused, underline when not focused */
+        if(i == ed->cur_y){
             int cursor_screen_x = rx+7+ed->cur_x - ed->scroll_x;
             if(cursor_screen_x >= rx+7 && cursor_screen_x < rx+rw-1){
                 at(row, cursor_screen_x);
-                cbg(TH->fg_bright); cfg(TH->bg_panel); G.cur_rev = true;
-                char c = ed->lines[i][ed->cur_x];
-                char cs[2] = {c?c:' ', 0};
+                char c = (ed->lines[i] && ed->lines[i][ed->cur_x]) ? ed->lines[i][ed->cur_x] : ' ';
+                char cs[2] = {c, 0};
+                if(act){
+                    cbg(TH->fg_accent1); cfg(TH->bg_base); G.cur_bold = true;
+                } else {
+                    /* Dim underline cursor when not focused */
+                    G.cur_under = true; cfg(TH->fg_dim);
+                }
                 put_cell(row, cursor_screen_x, cs);
-                G.cur_rev = false;
+                G.cur_bold = false; G.cur_under = false;
             }
         }
         rst();
@@ -2263,11 +2276,17 @@ static void draw_editor(int top, int rx, int rw, int h){
     }
 
     /* Editor Status Line */
-    at(top+h-2, rx+1); cfg(TH->fg_dim);
+    at(top+h-2, rx+1);
+    if(act){ cfg(TH->fg_bright); cbg(TH->bg_panel); G.cur_bold = true; }
+    else cfg(TH->fg_dim);
     char sbuf[256];
-    snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  ", ed->cur_y+1, ed->cur_x+1);
+    if(G.ed_selecting)
+        snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  [SEL] ", ed->cur_y+1, ed->cur_x+1);
+    else
+        snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  ", ed->cur_y+1, ed->cur_x+1);
     ppad(sbuf, (int)strlen(sbuf));
     at(top+h-2, rx+rw-20);
+    if(!act) cfg(TH->fg_dim); else { cfg(TH->fg_dim); cbg(TH->bg_panel); G.cur_bold = false; }
     snprintf(sbuf, sizeof(sbuf), " [UTF-8]  %s ", get_lang_name(t->path));
     ppad(sbuf, (int)strlen(sbuf));
     rst();
@@ -2896,10 +2915,10 @@ static void handle_mouse(MouseEvt m){
     int toggle_row = (G.current_view == VIEW_LOG) ? (ct + G.lh_log) : ct;
     int toggle_min_x = (G.current_view == VIEW_LOG) ? 1 : G.rx;
     
-    /* Editor Tab Clicks */
+    /* Editor Tab Clicks — uses ed_tab_x (separate from view tab_x) */
     if(cl && G.editor_active && m.row == toggle_row + 1 && m.col > toggle_min_x){
         for(int i=0; i<G.tab_count; i++){
-            if(m.col >= G.tab_x[i] && (i == G.tab_count-1 ? m.col < G.cols : m.col < G.tab_x[i+1])){
+            if(m.col >= G.ed_tab_x[i] && m.col < G.ed_tab_x[i+1]){
                 G.tab_current = i;
                 G.focus = FOCUS_EDITOR;
                 return;
@@ -2934,12 +2953,14 @@ static void handle_mouse(MouseEvt m){
     if(cl && (G.current_view == VIEW_STATUS || G.current_view == VIEW_LOG) && m.col > drx && m.row > dtop && m.row < G.rows-1){
         if(G.editor_active){
             G.ed_selecting = true;
-            G.ed_sel_start_y = G.ed_sel_end_y = CUR_ED.scroll_y + (m.row - (dtop+1));
+            G.ed_sel_start_y = G.ed_sel_end_y = CUR_ED.scroll_y + (m.row - (dtop+2));
             G.ed_sel_start_x = G.ed_sel_end_x = m.col - (drx + 7) + CUR_ED.scroll_x;
             if(G.ed_sel_start_y >= 0 && G.ed_sel_start_y < CUR_ED.line_count){
                 CUR_ED.cur_y = G.ed_sel_start_y;
                 CUR_ED.cur_x = iclamp(G.ed_sel_start_x, 0, (int)strlen(CUR_ED.lines[CUR_ED.cur_y]));
             }
+            G.focus = FOCUS_EDITOR;
+            return; /* don't fall through to view-specific handler */
         } else {
             G.selecting = true;
             G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (dtop+1));
@@ -3048,7 +3069,10 @@ static void handle_mouse(MouseEvt m){
                                 G.commits[ci].expanded = !G.commits[ci].expanded;
                                 if(G.commits[ci].expanded) fetch_commit_files(ci);
                             } else {
+                                /* Auto-expand on commit row click */
                                 G.graph_file_sel = -1;
+                                G.commits[ci].expanded = true;
+                                fetch_commit_files(ci);
                                 snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
                                 G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
                             }
@@ -3072,7 +3096,7 @@ static void handle_mouse(MouseEvt m){
                 }
             }
         } else if(in_r){
-            if(cl)G.focus=FOCUS_DIFF;
+            if(cl)G.focus = G.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
             if(cl && G.diff_is_summary){
                 int t = G.diff_scroll + (m.row - (ct+1));
                 if(t >= 0 && t < G.diff_count){
@@ -3451,7 +3475,8 @@ static void handle_key(Key k){
         case 'e':
             if(G.current_view == VIEW_STATUS){
                 if(G.focus == FOCUS_CHANGES && G.file_count > 0){
-                    editor_load(G.files[G.file_sel].path); G.editor_active = true; G.focus = FOCUS_EDITOR;
+                    if(G.editor_active){ G.editor_active = false; G.focus = FOCUS_CHANGES; update_diff(); }
+                    else { editor_load(G.files[G.file_sel].path); G.editor_active = true; G.focus = FOCUS_EDITOR; }
                 } else if(G.focus == FOCUS_GRAPH && G.commit_count > 0){
                     GitCommit *c = &G.commits[G.commit_sel];
                     if(G.graph_file_sel > 0){
