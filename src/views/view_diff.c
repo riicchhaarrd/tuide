@@ -7,6 +7,23 @@
 #include "../util.h"
 #include "../views.h"
 
+static int diff_wrap_rows(int text_len, int code_w) {
+	if (!g_app_state.diff_wrap || code_w <= 0 || text_len <= code_w) return 1;
+	int rows = (text_len + code_w - 1) / code_w;
+	if (rows > 20) rows = 20;
+	return rows;
+}
+
+static int diff_wrap_slice(const char *text, int text_len, int code_w, int wr, char *out) {
+	int wrap_offset = wr * code_w;
+	int wrap_avail = text_len - wrap_offset;
+	if (wrap_avail < 0) wrap_avail = 0;
+	int wrap_this = wrap_avail < code_w ? wrap_avail : code_w;
+	if (wrap_this > 0) memcpy(out, text + wrap_offset, wrap_this);
+	out[wrap_this] = '\0';
+	return wrap_this;
+}
+
 void draw_diff(int top, int render_x, int render_width, int h) {
 	if (h <= 2) return;
 	bool act = (g_app_state.focus == FOCUS_DIFF);
@@ -344,34 +361,68 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 				continue;
 			}
 			if (dl->type == 0) {
-				at(row, render_x + 1);
-				cbg(TH->bg_base);
-				cfg(TH->fg_dim);
-				put_cell(row, render_x + 1, " ");
-				at(row, render_x + 2);
-				cfg(TH->fg_linenum);
-				char lno[16];
-				snprintf(lno, sizeof(lno), "%*d ", lnum_w, dl->old_lno);
-				ppad_ext(lno, lnum_w + 1, di, render_x);
-				cfg(TH->fg_dim);
-				ppad_ext("\xe2\x94\x82", 1, di, render_x);
-				cfg(TH->fg_diff_ctx);
-				ppad_ext(dl->old_line, code_w_left, di, render_x);
-				at(row, render_x + half + 1);
-				cbg(TH->bg_base);
-				cfg(TH->fg_dim);
-				put_cell(row, render_x + half + 1, " ");
-				at(row, render_x + half + 2);
-				cfg(TH->fg_linenum);
-				snprintf(lno, sizeof(lno), "%*d ", lnum_w, dl->new_lno);
-				ppad_ext(lno, lnum_w + 1, di, render_x);
-				cfg(TH->fg_dim);
-				ppad_ext("\xe2\x94\x82", 1, di, render_x);
-				cfg(TH->fg_diff_ctx);
-				ppad_ext(dl->new_line, code_w_right, di, render_x);
-				rst();
+				int left_len = (int)strlen(dl->old_line);
+				int right_len = (int)strlen(dl->new_line);
+				int left_rows = diff_wrap_rows(left_len, code_w_left);
+				int right_rows = diff_wrap_rows(right_len, code_w_right);
+				int nrows = imax(left_rows, right_rows);
+				if (row + nrows > lim) nrows = lim - row;
+				if (nrows < 1) nrows = 1;
+
+				for (int wr = 0; wr < nrows && row < lim; wr++, row++) {
+					char lno[16];
+					char tmp[LINE_MAX_LEN + 1];
+
+					at(row, render_x + 1);
+					cbg(TH->bg_base);
+					cfg(TH->fg_dim);
+					put_cell(row, render_x + 1, " ");
+					at(row, render_x + 2);
+					cfg(TH->fg_linenum);
+					if (wr == 0) {
+						snprintf(lno, sizeof(lno), "%*d ", lnum_w, dl->old_lno);
+						ppad_ext(lno, lnum_w + 1, di, render_x);
+					} else {
+						for (int kk = 0; kk <= lnum_w; kk++)
+							put_cell(row, render_x + 2 + kk, " ");
+						at(row, render_x + 3 + lnum_w);
+					}
+					cfg(TH->fg_dim);
+					ppad_ext("\xe2\x94\x82", 1, di, render_x);
+					cfg(TH->fg_diff_ctx);
+					if (wr < left_rows) {
+						diff_wrap_slice(dl->old_line, left_len, code_w_left, wr, tmp);
+						ppad_ext(tmp, code_w_left, di, render_x);
+					} else {
+						ppad_ext("", code_w_left, di, render_x);
+					}
+
+					at(row, render_x + half + 1);
+					cbg(TH->bg_base);
+					cfg(TH->fg_dim);
+					put_cell(row, render_x + half + 1, " ");
+					at(row, render_x + half + 2);
+					cfg(TH->fg_linenum);
+					if (wr == 0) {
+						snprintf(lno, sizeof(lno), "%*d ", lnum_w, dl->new_lno);
+						ppad_ext(lno, lnum_w + 1, di, render_x);
+					} else {
+						for (int kk = 0; kk <= lnum_w; kk++)
+							put_cell(row, render_x + half + 2 + kk, " ");
+						at(row, render_x + half + 3 + lnum_w);
+					}
+					cfg(TH->fg_dim);
+					ppad_ext("\xe2\x94\x82", 1, di, render_x);
+					cfg(TH->fg_diff_ctx);
+					if (wr < right_rows) {
+						diff_wrap_slice(dl->new_line, right_len, code_w_right, wr, tmp);
+						ppad_ext(tmp, code_w_right, di, render_x);
+					} else {
+						ppad_ext("", code_w_right, di, render_x);
+					}
+					rst();
+				}
 				di++;
-				row++;
 				continue;
 			}
 			int ndel = 0, nadd = 0;
@@ -384,63 +435,97 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 
 			if (ndel > 0 || nadd > 0) {
 				int nmax = imax(ndel, nadd);
-				for (int i = 0; i < nmax && row < lim; i++, row++) {
+				for (int i = 0; i < nmax && row < lim; i++) {
 					DiffLine *od = (i < ndel) ? &g_app_state.diff_lines[di + i] : NULL;
 					DiffLine *nd = (i < nadd) ? &g_app_state.diff_lines[di + ndel + i] : NULL;
-					at(row, render_x + 1);
-					if (od) {
-						cbg(TH->bg_diff_del);
-						cfg(TH->fg_err);
-						g_app_state.cur_bold = true;
-						put_cell(row, render_x + 1, "\xe2\x96\x8c");
-						g_app_state.cur_bold = false;
-						at(row, render_x + 2);
-						cfg(TH->fg_linenum);
+					int left_len = od ? (int)strlen(od->old_line) : 0;
+					int right_len = nd ? (int)strlen(nd->new_line) : 0;
+					int left_rows = od ? diff_wrap_rows(left_len, code_w_left) : 1;
+					int right_rows = nd ? diff_wrap_rows(right_len, code_w_right) : 1;
+					int nrows = imax(left_rows, right_rows);
+					if (row + nrows > lim) nrows = lim - row;
+					if (nrows < 1) nrows = 1;
+
+					for (int wr = 0; wr < nrows && row < lim; wr++, row++) {
 						char lno[16];
-						snprintf(lno, sizeof(lno), "%*d ", lnum_w, od->old_lno);
-						ppad_ext(lno, lnum_w + 1, di + i, render_x);
-						cfg(TH->fg_err);
-						ppad_ext("-", 1, di + i, render_x);
-						cfg(TH->fg_diff_del);
-						g_app_state.cur_bold = true;
-						ppad_ext(od->old_line, code_w_left, di + i, render_x);
-					} else {
-						cbg(TH->bg_panel);
-						cfg(TH->fg_dim);
-						put_cell(row, render_x + 1, " ");
-						at(row, render_x + 2);
-						ppad_ext("", lnum_w + 1, -1, render_x);
-						ppad_ext("\xe2\x94\x86", 1, -1, render_x);
-						ppad_ext("", code_w_left, -1, render_x);
+						char tmp[LINE_MAX_LEN + 1];
+
+						at(row, render_x + 1);
+						if (od) {
+							cbg(TH->bg_diff_del);
+							cfg(TH->fg_err);
+							g_app_state.cur_bold = true;
+							put_cell(row, render_x + 1, "\xe2\x96\x8c");
+							g_app_state.cur_bold = false;
+							at(row, render_x + 2);
+							cfg(TH->fg_linenum);
+							if (wr == 0) {
+								snprintf(lno, sizeof(lno), "%*d ", lnum_w, od->old_lno);
+								ppad_ext(lno, lnum_w + 1, di + i, render_x);
+							} else {
+								for (int kk = 0; kk <= lnum_w; kk++)
+									put_cell(row, render_x + 2 + kk, " ");
+								at(row, render_x + 3 + lnum_w);
+							}
+							cfg(TH->fg_err);
+							ppad_ext("-", 1, di + i, render_x);
+							cfg(TH->fg_diff_del);
+							g_app_state.cur_bold = true;
+							if (wr < left_rows) {
+								diff_wrap_slice(od->old_line, left_len, code_w_left, wr, tmp);
+								ppad_ext(tmp, code_w_left, di + i, render_x);
+							} else {
+								ppad_ext("", code_w_left, di + i, render_x);
+							}
+						} else {
+							cbg(TH->bg_panel);
+							cfg(TH->fg_dim);
+							put_cell(row, render_x + 1, " ");
+							at(row, render_x + 2);
+							ppad_ext("", lnum_w + 1, -1, render_x);
+							ppad_ext("\xe2\x94\x86", 1, -1, render_x);
+							ppad_ext("", code_w_left, -1, render_x);
+						}
+						rst();
+
+						at(row, render_x + half + 1);
+						if (nd) {
+							cbg(TH->bg_diff_add);
+							cfg(TH->fg_ok);
+							g_app_state.cur_bold = true;
+							put_cell(row, render_x + half + 1, "\xe2\x96\x8c");
+							g_app_state.cur_bold = false;
+							at(row, render_x + half + 2);
+							cfg(TH->fg_linenum);
+							if (wr == 0) {
+								snprintf(lno, sizeof(lno), "%*d ", lnum_w, nd->new_lno);
+								ppad_ext(lno, lnum_w + 1, di + ndel + i, render_x);
+							} else {
+								for (int kk = 0; kk <= lnum_w; kk++)
+									put_cell(row, render_x + half + 2 + kk, " ");
+								at(row, render_x + half + 3 + lnum_w);
+							}
+							cfg(TH->fg_ok);
+							ppad_ext("+", 1, di + ndel + i, render_x);
+							cfg(TH->fg_diff_add);
+							g_app_state.cur_bold = true;
+							if (wr < right_rows) {
+								diff_wrap_slice(nd->new_line, right_len, code_w_right, wr, tmp);
+								ppad_ext(tmp, code_w_right, di + ndel + i, render_x);
+							} else {
+								ppad_ext("", code_w_right, di + ndel + i, render_x);
+							}
+						} else {
+							cbg(TH->bg_panel);
+							cfg(TH->fg_dim);
+							put_cell(row, render_x + half + 1, " ");
+							at(row, render_x + half + 2);
+							ppad_ext("", lnum_w + 1, -1, render_x);
+							ppad_ext("\xe2\x94\x86", 1, -1, render_x);
+							ppad_ext("", code_w_right, -1, render_x);
+						}
+						rst();
 					}
-					rst();
-					at(row, render_x + half + 1);
-					if (nd) {
-						cbg(TH->bg_diff_add);
-						cfg(TH->fg_ok);
-						g_app_state.cur_bold = true;
-						put_cell(row, render_x + half + 1, "\xe2\x96\x8c");
-						g_app_state.cur_bold = false;
-						at(row, render_x + half + 2);
-						cfg(TH->fg_linenum);
-						char lno[16];
-						snprintf(lno, sizeof(lno), "%*d ", lnum_w, nd->new_lno);
-						ppad_ext(lno, lnum_w + 1, di + ndel + i, render_x);
-						cfg(TH->fg_ok);
-						ppad_ext("+", 1, di + ndel + i, render_x);
-						cfg(TH->fg_diff_add);
-						g_app_state.cur_bold = true;
-						ppad_ext(nd->new_line, code_w_right, di + ndel + i, render_x);
-					} else {
-						cbg(TH->bg_panel);
-						cfg(TH->fg_dim);
-						put_cell(row, render_x + half + 1, " ");
-						at(row, render_x + half + 2);
-						ppad_ext("", lnum_w + 1, -1, render_x);
-						ppad_ext("\xe2\x94\x86", 1, -1, render_x);
-						ppad_ext("", code_w_right, -1, render_x);
-					}
-					rst();
 				}
 				di += ndel + nadd;
 			} else {
