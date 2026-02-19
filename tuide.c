@@ -333,6 +333,9 @@ typedef struct {
     int  commit_msg_cursor;
     bool commit_bar_focused;
 
+    /* Editor search */
+    char ed_search[INPUT_MAX];
+
     /* Context Menu */
     bool menu_active;
     int  menu_x, menu_y, menu_w, menu_h;
@@ -1205,17 +1208,17 @@ static void draw_statusbar(void){
     
     const char *hint="";
     if(G.current_view==VIEW_STATUS){
-        if(G.focus==FOCUS_CHANGES) hint="c:commit  e:edit  SPC:stage  a:all  u:unstage  d:discard  V:vi  W:wrap  T:theme";
-        else if(G.focus==FOCUS_GRAPH) hint="↑/↓:move  ↵:diff  V:vi  W:wrap  T:theme";
+        if(G.focus==FOCUS_CHANGES) hint="c:commit  SPC:stage  a:all  u:unstage  d:discard  e:edit  V:vi  g/G:top/bot  W:wrap  T:theme";
+        else if(G.focus==FOCUS_GRAPH) hint="↑/↓:move  ↵:diff  g/G:top/bot  V:vi  W:wrap  T:theme";
         else if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open  ←:back  b:close";
-        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  Ctrl+Z:undo  V:vi  Ctrl+S:save";
-        else hint="↑/↓:scroll  s:split  W:wrap  q:back  T:theme";
+        else if(G.focus==FOCUS_EDITOR) hint="Arrows:move  Shift+Arrows:select  n/N:find  Ctrl+F:search  Ctrl+Z:undo  Ctrl+S:save  V:vi";
+        else hint="↑/↓:scroll  g/G:top/bot  s:split  W:wrap  q:back  T:theme";
     } else if(G.current_view==VIEW_LOG) hint="e:edit  ↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
     else if(G.current_view==VIEW_BRANCHES) hint="↵:checkout  n:new  D:delete";
     else if(G.current_view==VIEW_STASH) hint="↵:apply  p:pop  D:drop  s:stash";
     else if(G.current_view==VIEW_EDITOR) {
         if(G.focus==FOCUS_BROWSER) hint="↑/↓:move  ↵/→:open/enter  ←:back  Tab:editor";
-        else hint="Arrows:move  Shift+Arrows:select  Ctrl+Z:undo  Ctrl+Y:redo  Ctrl+X:cut  Ctrl+C:copy  Ctrl+V:paste  Ctrl+S:save  f:files";
+        else hint="Arrows:move  Shift:select  n/N:find next/prev  Ctrl+F:search  Ctrl+Z:undo  Ctrl+Y:redo  Ctrl+X:cut  Ctrl+C:copy  Ctrl+S:save";
     }
     else if(G.current_view==VIEW_HELP) hint="q:close help";
     
@@ -2669,6 +2672,26 @@ static void draw_editor(int top, int rx, int rw, int h){
                 G.cur_bold = false; G.cur_under = false;
             }
         }
+        /* Search match highlight */
+        if(G.ed_search[0]){
+            int plen = (int)strlen(G.ed_search);
+            char *line_raw = ed->lines[i];
+            char *p = line_raw;
+            while((p = strstr(p, G.ed_search)) != NULL){
+                int mx = (int)(p - line_raw);
+                for(int k2 = 0; k2 < plen; k2++){
+                    int scol = rx + 7 + mx + k2 - ed->scroll_x;
+                    if(scol >= rx+7 && scol < rx+rw-3){
+                        at(row, scol);
+                        cbg(TH->bg_diff_hdr); cfg(TH->fg_bright); G.cur_bold = true;
+                        char sc[2] = {line_raw[mx+k2], 0};
+                        put_cell(row, scol, sc);
+                        G.cur_bold = false;
+                    }
+                }
+                p += plen;
+            }
+        }
         rst();
     }
     while(row < lim - 1){
@@ -3268,13 +3291,14 @@ static void editor_goto_line(const char *lstr){
 
 static void editor_find(const char *pattern){
     if(!pattern || !pattern[0]) return;
+    snprintf(G.ed_search, sizeof(G.ed_search), "%s", pattern);
     for(int i=CUR_ED.cur_y; i<CUR_ED.line_count; i++){
         char *line = CUR_ED.lines[i];
         char *pos = strstr(i == CUR_ED.cur_y ? line + CUR_ED.cur_x + 1 : line, pattern);
         if(pos){
             CUR_ED.cur_y = i;
             CUR_ED.cur_x = (int)(pos - line);
-            OK("Found: %s", pattern);
+            OK("Found: %s (n/N for next/prev)", pattern);
             return;
         }
     }
@@ -3287,6 +3311,51 @@ static void editor_find(const char *pattern){
             OK("Found (wrapped): %s", pattern);
             return;
         }
+    }
+    ERR("Not found: %s", pattern);
+}
+
+static void editor_find_next(void){
+    if(!G.ed_search[0]){ ERR("No search term (Ctrl+F to search)"); return; }
+    const char *pattern = G.ed_search;
+    for(int i=CUR_ED.cur_y; i<CUR_ED.line_count; i++){
+        char *line = CUR_ED.lines[i];
+        char *pos = strstr(i == CUR_ED.cur_y ? line + CUR_ED.cur_x + 1 : line, pattern);
+        if(pos){ CUR_ED.cur_y=i; CUR_ED.cur_x=(int)(pos-line); OK("Next: %s",pattern); return; }
+    }
+    for(int i=0; i<=CUR_ED.cur_y; i++){
+        char *line = CUR_ED.lines[i];
+        int start = (i == CUR_ED.cur_y) ? 0 : 0;
+        char *pos = strstr(line + start, pattern);
+        if(pos){ CUR_ED.cur_y=i; CUR_ED.cur_x=(int)(pos-line); OK("Next (wrapped): %s",pattern); return; }
+    }
+    ERR("Not found: %s", pattern);
+}
+
+static void editor_find_prev(void){
+    if(!G.ed_search[0]){ ERR("No search term (Ctrl+F to search)"); return; }
+    const char *pattern = G.ed_search;
+    int plen = (int)strlen(pattern);
+    for(int i=CUR_ED.cur_y; i>=0; i--){
+        char *line = CUR_ED.lines[i];
+        int search_end = (i == CUR_ED.cur_y) ? (CUR_ED.cur_x > 0 ? CUR_ED.cur_x - 1 : -1) : (int)strlen(line);
+        if(search_end < 0) continue;
+        /* Find last occurrence before search_end */
+        char *found = NULL;
+        for(int j=0; j<=search_end-plen+1 && j <= (int)strlen(line)-plen; j++){
+            if(strncmp(line+j, pattern, plen)==0) found = line+j;
+        }
+        if(found){ CUR_ED.cur_y=i; CUR_ED.cur_x=(int)(found-line); OK("Prev: %s",pattern); return; }
+    }
+    /* Wrap from end */
+    for(int i=CUR_ED.line_count-1; i>CUR_ED.cur_y; i--){
+        char *line = CUR_ED.lines[i];
+        int llen = (int)strlen(line);
+        char *found = NULL;
+        for(int j=0; j<=llen-plen; j++){
+            if(strncmp(line+j, pattern, plen)==0) found = line+j;
+        }
+        if(found){ CUR_ED.cur_y=i; CUR_ED.cur_x=(int)(found-line); OK("Prev (wrapped): %s",pattern); return; }
     }
     ERR("Not found: %s", pattern);
 }
@@ -3666,7 +3735,7 @@ static void handle_mouse(MouseEvt m){
                 if(m.row == commit_bar_row && cl){
                     int sx2 = G.sidebar_w + 1;
                     int iw2 = G.lw - 2;
-                    int field_w2 = iw2 - 3 - 12;
+                    int field_w2 = iw2 - 3 - 14;
                     int btn_x2 = sx2 + 4 + field_w2;
                     if(m.col >= btn_x2 && m.col < btn_x2 + 7){
                         G.commit_bar_focused = false;
@@ -3674,6 +3743,16 @@ static void handle_mouse(MouseEvt m){
                     } else if(m.col >= btn_x2 + 7 && m.col < btn_x2 + 14){
                         G.commit_bar_focused = false;
                         do_amend_bar();
+                    } else if(m.col >= sx2 + 4 && m.col < btn_x2) {
+                        /* Click inside text field — position cursor */
+                        G.commit_bar_focused = true;
+                        G.focus = FOCUS_CHANGES;
+                        int len = (int)strlen(G.commit_msg_buf);
+                        int disp_start = 0;
+                        if(G.commit_msg_cursor >= field_w2)
+                            disp_start = G.commit_msg_cursor - field_w2 + 1;
+                        int clicked_pos = (m.col - (sx2 + 4)) + disp_start;
+                        G.commit_msg_cursor = iclamp(clicked_pos, 0, len);
                     } else {
                         G.commit_bar_focused = true;
                         G.focus = FOCUS_CHANGES;
@@ -3889,7 +3968,8 @@ static void handle_mouse(MouseEvt m){
             if(su) CUR_ED.cur_y=imax(0, CUR_ED.cur_y-3);
             if(sd) CUR_ED.cur_y=imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0, CUR_ED.cur_y+3);
             if(cl){
-                int ty = CUR_ED.scroll_y + (m.row - (ct+1));
+                /* ct=2, box top=1, tab bar=1 → content starts at ct+3 */
+                int ty = CUR_ED.scroll_y + (m.row - (ct+3));
                 if(ty >= 0 && ty < CUR_ED.line_count){
                     CUR_ED.cur_y = ty;
                     CUR_ED.cur_x = iclamp(m.col - (G.rx + 7) + CUR_ED.scroll_x, 0, (int)strlen(CUR_ED.lines[ty]));
@@ -4141,9 +4221,15 @@ static void handle_key(Key k){
         case KEY_CTRL_Z:editor_undo(&G.tabs[G.tab_current].ed); break;
         case KEY_CTRL_Y:editor_redo(&G.tabs[G.tab_current].ed); break;
         case KEY_CTRL_W:editor_close_tab(); break;
+        case KEY_HOME:  G.ed_selecting=false; CUR_ED.cur_x=0; break;
+        case KEY_END:   G.ed_selecting=false; CUR_ED.cur_x=(CUR_ED.lines[CUR_ED.cur_y]?(int)strlen(CUR_ED.lines[CUR_ED.cur_y]):0); break;
+        case KEY_PGUP:  G.ed_selecting=false; CUR_ED.cur_y=imax(0,CUR_ED.cur_y-(G.rows-6)); break;
+        case KEY_PGDN:  G.ed_selecting=false; CUR_ED.cur_y=imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0,CUR_ED.cur_y+(G.rows-6)); break;
         case KEY_F1: editor_prev_tab(); break;
         case KEY_F2: editor_next_tab(); break;
         case KEY_CHAR:
+            if(k.ch=='n'){ editor_find_next(); break; }
+            if(k.ch=='N'){ editor_find_prev(); break; }
             if(G.ed_selecting) editor_delete_selection();
             editor_insert_char(k.ch); break;
         case KEY_ESC: G.ed_selecting = false; G.focus = (G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES); break;
@@ -4295,7 +4381,11 @@ static void handle_key(Key k){
         if(G.focus == FOCUS_EDITOR) prompt_start("Go to line:", editor_goto_line, false);
         return; 
     }
-    if(k.type==KEY_CTRL_S) { if(G.current_view==VIEW_STATUS && G.focus==FOCUS_CHANGES) action_stage(); return; }
+    if(k.type==KEY_CTRL_S) {
+        if(G.focus==FOCUS_EDITOR) editor_save();
+        else if(G.current_view==VIEW_STATUS && G.focus==FOCUS_CHANGES) action_stage();
+        return;
+    }
     if(k.type==KEY_CTRL_Q) { G.running=false; return; }
     if(k.type==KEY_ESC){
         if(G.current_view==VIEW_HELP){G.current_view=VIEW_STATUS;return;}
@@ -4338,11 +4428,12 @@ static void handle_key(Key k){
         }
         if(G.focus==FOCUS_CHANGES){
             int cnt=G.file_count;
+            int cvis=imax(1, G.lh_chg - 6);
             switch(k.type){
-            case KEY_UP:   msel(&G.file_sel,&G.file_scroll,cnt,-1,vis,false);break;
-            case KEY_DOWN: msel(&G.file_sel,&G.file_scroll,cnt, 1,vis,false);break;
-            case KEY_PGUP: msel(&G.file_sel,&G.file_scroll,cnt,-vis/2,vis,false);break;
-            case KEY_PGDN: msel(&G.file_sel,&G.file_scroll,cnt, vis/2,vis,false);break;
+            case KEY_UP:   msel(&G.file_sel,&G.file_scroll,cnt,-1,cvis,false);break;
+            case KEY_DOWN: msel(&G.file_sel,&G.file_scroll,cnt, 1,cvis,false);break;
+            case KEY_PGUP: msel(&G.file_sel,&G.file_scroll,cnt,-cvis,cvis,false);break;
+            case KEY_PGDN: msel(&G.file_sel,&G.file_scroll,cnt, cvis,cvis,false);break;
             case KEY_HOME: G.file_sel=0;G.file_scroll=0;break;
             case KEY_END:  G.file_sel=cnt>0?cnt-1:0;break;
             case KEY_ENTER:G.focus=FOCUS_DIFF;break;
@@ -4359,6 +4450,8 @@ static void handle_key(Key k){
                     }
                 }
                 else if(k.ch=='s')action_stash();
+                else if(k.ch=='g'){ G.file_sel=0; G.file_scroll=0; update_diff(); }
+                else if(k.ch=='G'){ G.file_sel=cnt>0?cnt-1:0; update_diff(); }
                 break;
             default:break;
             }
@@ -4432,6 +4525,8 @@ static void handle_key(Key k){
                     }
                 }
                 else if(k.ch=='s')action_stash();
+                else if(k.ch=='g'){ G.commit_sel=0; G.commit_scroll=0; G.graph_file_sel=-1; sync_graph_preview(); }
+                else if(k.ch=='G'){ G.commit_sel=G.commit_count>0?G.commit_count-1:0; G.graph_file_sel=-1; sync_graph_preview(); }
                 break;
             default:break;
             }
@@ -4505,6 +4600,8 @@ static void handle_key(Key k){
                 else if(k.ch==']') { G.diff_split_custom = G.diff_split + 4; layout(); }
                 else if(k.ch=='<') { G.diff_split_custom = G.diff_split - 1; layout(); }
                 else if(k.ch=='>') { G.diff_split_custom = G.diff_split + 1; layout(); }
+                else if(k.ch=='g') { G.diff_scroll=0; }
+                else if(k.ch=='G') { G.diff_scroll=G.diff_count; }
                 else if(k.ch=='q' && !G.diff_is_summary && G.diff_commit[0]) {
                     load_commit_summary(G.diff_commit);
                 }
