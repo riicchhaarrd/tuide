@@ -210,7 +210,8 @@ typedef enum {
     KEY_CTRL_A,KEY_CTRL_B,KEY_CTRL_C,KEY_CTRL_D,KEY_CTRL_E,
     KEY_CTRL_F,KEY_CTRL_G,KEY_CTRL_K,KEY_CTRL_N,KEY_CTRL_P,
     KEY_CTRL_U,KEY_CTRL_W,KEY_CTRL_Y,
-    KEY_CTRL_R,KEY_CTRL_S,KEY_CTRL_L,KEY_CTRL_Q,KEY_CTRL_V,
+    KEY_CTRL_R,KEY_CTRL_S,KEY_CTRL_L,KEY_CTRL_Q,KEY_CTRL_V,KEY_CTRL_X,
+    KEY_SHIFT_UP,KEY_SHIFT_DOWN,KEY_SHIFT_LEFT,KEY_SHIFT_RIGHT,
     KEY_MOUSE,KEY_CHAR,
     KEY_F1,KEY_F2,KEY_F3,KEY_F4,KEY_F5
 } KeyType;
@@ -2099,6 +2100,23 @@ static const char *get_lang_name(const char *path){
     return "Plain Text";
 }
 
+static void draw_scrollbar(int r, int c, int h, int total, int vis, int scroll, bool active){
+    if(total <= vis || h <= 0) return;
+    int bh = imax(1, (vis * h) / total);
+    int bpos = ((scroll * (h - bh)) / (total - vis));
+    for(int i=0; i<h; i++){
+        at(r+i, c);
+        if(i >= bpos && i < bpos + bh){
+            cfg(active ? TH->fg_accent1 : TH->fg_dim);
+            put_cell(r+i, c, "█");
+        } else {
+            cfg(TH->fg_dim);
+            put_cell(r+i, c, "│");
+        }
+    }
+    rst();
+}
+
 static void draw_editor(int top, int rx, int rw, int h){
     if(G.tab_count == 0) {
         box_top(top, rx, rw, "Editor", (G.focus == FOCUS_EDITOR), NULL);
@@ -2129,11 +2147,19 @@ static void draw_editor(int top, int rx, int rw, int h){
         at(top+1, cur_tab_x);
         if(cur) { cbg(TH->bg_base); cfg(TH->fg_bright); G.cur_bold=true; }
         else { cbg(TH->bg_panel); cfg(TH->fg_dim); }
+        
         char *fname = strrchr(G.tabs[i].path, '/');
         fname = fname ? fname + 1 : G.tabs[i].path;
-        char tbuf[64]; snprintf(tbuf, sizeof(tbuf), " %s%s ", fname, G.tabs[i].ed.modified?"*":"");
-        ppad(tbuf, (int)strlen(tbuf));
-        cur_tab_x += (int)strlen(tbuf);
+        
+        char tbuf[128]; 
+        int tab_w = snprintf(tbuf, sizeof(tbuf), "  %s%s  ", fname, G.tabs[i].ed.modified?"*":"");
+        ppad(tbuf, tab_w);
+        
+        /* Save tab boundaries for clicking */
+        if(i < 7) G.tab_x[i] = cur_tab_x;
+        if(i == G.tab_count - 1 && i+1 < 7) G.tab_x[i+1] = cur_tab_x + tab_w;
+
+        cur_tab_x += tab_w;
         if(!cur) { cfg(TH->fg_dim); put_cell(top+1, cur_tab_x-1, "│"); }
         rst();
     }
@@ -2146,7 +2172,7 @@ static void draw_editor(int top, int rx, int rw, int h){
     if(ed->cur_x < ed->scroll_x) ed->scroll_x = ed->cur_x;
     if(ed->cur_x >= ed->scroll_x + vis_w) ed->scroll_x = ed->cur_x - vis_w + 1;
 
-    for(int i=ed->scroll_y; i<ed->line_count && row < lim; i++, row++){
+    for(int i=ed->scroll_y; i<ed->line_count && row < lim - 1; i++, row++){
         at(row, rx+1);
         cfg(TH->fg_linenum);
         char lno[16]; snprintf(lno, sizeof(lno), "%4d ", i+1); ppad(lno, 5);
@@ -2205,25 +2231,45 @@ static void draw_editor(int top, int rx, int rw, int h){
             int cursor_screen_x = rx+7+ed->cur_x - ed->scroll_x;
             if(cursor_screen_x >= rx+7 && cursor_screen_x < rx+rw-1){
                 at(row, cursor_screen_x);
-                cbg(TH->fg_accent1); cfg(TH->bg_base);
+                cbg(TH->fg_bright); cfg(TH->bg_panel); G.cur_rev = true;
                 char c = ed->lines[i][ed->cur_x];
                 char cs[2] = {c?c:' ', 0};
                 put_cell(row, cursor_screen_x, cs);
+                G.cur_rev = false;
             }
         }
         rst();
     }
-    while(row < lim){
+    while(row < lim - 1){
         at(row, rx+1); cbg(TH->bg_base); 
         for(int i=0; i<rw-2; i++) put_cell(row, rx+1+i, " ");
         row++;
     }
 
+    /* Scrollbars */
+    draw_scrollbar(top+2, rx+rw-1, h-4, ed->line_count, h-4, ed->scroll_y, act);
+    
+    /* Horizontal scrollbar line */
+    at(top+h-2, rx+1); cbg(TH->bg_panel);
+    for(int i=0; i<rw-2; i++) put_cell(top+h-2, rx+1+i, " ");
+    int max_line_w = 0;
+    for(int i=0; i<ed->line_count; i++) { int l = (int)strlen(ed->lines[i]); if(l > max_line_w) max_line_w = l; }
+    if(max_line_w > vis_w){
+        int h_bh = imax(2, (vis_w * (rw-10)) / max_line_w);
+        int h_bpos = (ed->scroll_x * (rw-10 - h_bh)) / (max_line_w - vis_w);
+        at(top+h-2, rx+7+h_bpos);
+        cfg(act?TH->fg_accent1:TH->fg_dim);
+        for(int i=0; i<h_bh; i++) put_cell(top+h-2, rx+7+h_bpos+i, "━");
+    }
+
     /* Editor Status Line */
-    at(top+h-2, rx+1); cbg(TH->bg_panel); cfg(TH->fg_dim);
+    at(top+h-2, rx+1); cfg(TH->fg_dim);
     char sbuf[256];
-    snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  [UTF-8]  %s ", ed->cur_y+1, ed->cur_x+1, get_lang_name(t->path));
-    ppad(sbuf, rw-2);
+    snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  ", ed->cur_y+1, ed->cur_x+1);
+    ppad(sbuf, (int)strlen(sbuf));
+    at(top+h-2, rx+rw-20);
+    snprintf(sbuf, sizeof(sbuf), " [UTF-8]  %s ", get_lang_name(t->path));
+    ppad(sbuf, (int)strlen(sbuf));
     rst();
 
     box_bot(top+h-1, rx, rw, act);
@@ -2328,6 +2374,14 @@ static Key read_key(void){
                 case 'Z':k.type=KEY_SHIFT_TAB;return k;
                 }
             }
+            if(n==6 && buf[2]=='1' && buf[3]==';' && buf[4]=='2'){
+                switch(buf[5]){
+                case 'A':k.type=KEY_SHIFT_UP;return k;
+                case 'B':k.type=KEY_SHIFT_DOWN;return k;
+                case 'C':k.type=KEY_SHIFT_RIGHT;return k;
+                case 'D':k.type=KEY_SHIFT_LEFT;return k;
+                }
+            }
             if(n>=4&&buf[n-1]=='~'){
                 switch(buf[2]){
                 case '1':k.type=KEY_HOME;return k;
@@ -2379,6 +2433,7 @@ static Key read_key(void){
     case 21:k.type=KEY_CTRL_U;return k;
     case 22:k.type=KEY_CTRL_V;return k;
     case 23:k.type=KEY_CTRL_W;return k;
+    case 24:k.type=KEY_CTRL_X;return k;
     case 25:k.type=KEY_CTRL_Y;return k;
     }
     if(buf[0]>=32&&buf[0]<127){k.type=KEY_CHAR;k.ch=(char)buf[0];return k;}
@@ -2560,10 +2615,180 @@ static void action_drop_stash(void){
 /* ================================================================
    SELECTION HELPER (Vi-count aware)
 ================================================================ */
-static void msel(int *sel,int *scr,int cnt,int d,int vis){
+static void msel(int *sel,int *scr,int cnt,int d,int vis, bool is_graph){
     *sel=iclamp(*sel+d,0,cnt>0?cnt-1:0);
     if(*sel<*scr)*scr=*sel;
     if(*sel>=*scr+vis)*scr=*sel-vis+1;
+    if(is_graph && cnt > 0){
+        G.commits[*sel].expanded = true;
+        fetch_commit_files(*sel);
+        sync_graph_preview();
+    }
+}
+
+static void editor_insert_char(char c){
+    if(CUR_ED.line_count == 0){
+        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * 128);
+        CUR_ED.line_cap = 128;
+        CUR_ED.lines[CUR_ED.line_count++] = strdup("");
+    }
+    char *line = CUR_ED.lines[CUR_ED.cur_y];
+    int len = (int)strlen(line);
+    char *n = malloc(len + 2);
+    memcpy(n, line, CUR_ED.cur_x);
+    n[CUR_ED.cur_x] = c;
+    memcpy(n + CUR_ED.cur_x + 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x);
+    n[len + 1] = '\0';
+    free(line);
+    CUR_ED.lines[CUR_ED.cur_y] = n;
+    CUR_ED.cur_x++;
+    CUR_ED.modified = true;
+}
+
+static void editor_backspace(void){
+    if(CUR_ED.cur_x > 0){
+        char *line = CUR_ED.lines[CUR_ED.cur_y];
+        int len = (int)strlen(line);
+        memmove(line + CUR_ED.cur_x - 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x + 1);
+        CUR_ED.cur_x--;
+        CUR_ED.modified = true;
+    } else if(CUR_ED.cur_y > 0){
+        char *prev = CUR_ED.lines[CUR_ED.cur_y - 1];
+        char *curr = CUR_ED.lines[CUR_ED.cur_y];
+        int plen = (int)strlen(prev);
+        int clen = (int)strlen(curr);
+        char *n = malloc(plen + clen + 1);
+        memcpy(n, prev, plen);
+        memcpy(n + plen, curr, clen + 1);
+        free(prev); free(curr);
+        CUR_ED.lines[CUR_ED.cur_y - 1] = n;
+        for(int i=CUR_ED.cur_y; i<CUR_ED.line_count-1; i++) CUR_ED.lines[i] = CUR_ED.lines[i+1];
+        CUR_ED.line_count--;
+        CUR_ED.cur_y--;
+        CUR_ED.cur_x = plen;
+        CUR_ED.modified = true;
+    }
+}
+
+static void editor_newline(void){
+    char *line = CUR_ED.lines[CUR_ED.cur_y];
+    char *next = strdup(line + CUR_ED.cur_x);
+    line[CUR_ED.cur_x] = '\0';
+    if(CUR_ED.line_count >= CUR_ED.line_cap){
+        CUR_ED.line_cap = CUR_ED.line_cap ? CUR_ED.line_cap * 2 : 128;
+        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * CUR_ED.line_cap);
+    }
+    for(int i=CUR_ED.line_count; i > CUR_ED.cur_y + 1; i--) CUR_ED.lines[i] = CUR_ED.lines[i-1];
+    CUR_ED.lines[CUR_ED.cur_y + 1] = next;
+    CUR_ED.line_count++;
+    CUR_ED.cur_y++;
+    CUR_ED.cur_x = 0;
+    CUR_ED.modified = true;
+}
+
+static void editor_goto_line(const char *lstr){
+    int l = atoi(lstr);
+    if(l > 0 && l <= CUR_ED.line_count){
+        CUR_ED.cur_y = l - 1;
+        CUR_ED.cur_x = 0;
+        OK("Jumped to line %d", l);
+    } else ERR("Invalid line number");
+}
+
+static void editor_find(const char *pattern){
+    if(!pattern || !pattern[0]) return;
+    for(int i=CUR_ED.cur_y; i<CUR_ED.line_count; i++){
+        char *line = CUR_ED.lines[i];
+        char *pos = strstr(i == CUR_ED.cur_y ? line + CUR_ED.cur_x + 1 : line, pattern);
+        if(pos){
+            CUR_ED.cur_y = i;
+            CUR_ED.cur_x = (int)(pos - line);
+            OK("Found: %s", pattern);
+            return;
+        }
+    }
+    for(int i=0; i<CUR_ED.cur_y; i++){
+        char *line = CUR_ED.lines[i];
+        char *pos = strstr(line, pattern);
+        if(pos){
+            CUR_ED.cur_y = i;
+            CUR_ED.cur_x = (int)(pos - line);
+            OK("Found (wrapped): %s", pattern);
+            return;
+        }
+    }
+    ERR("Not found: %s", pattern);
+}
+
+static void editor_paste(void){
+    if(!G.clipboard) return;
+    for(int i=0; G.clipboard[i]; i++){
+        if(G.clipboard[i] == '\n') editor_newline();
+        else editor_insert_char(G.clipboard[i]);
+    }
+}
+
+static void action_copy_editor_selection(void){
+    if(!G.ed_selecting) return;
+    int sy = G.ed_sel_start_y, sx = G.ed_sel_start_x;
+    int ey = G.ed_sel_end_y, ex = G.ed_sel_end_x;
+    if(sy > ey || (sy == ey && sx > ex)){ int t=sy; sy=ey; ey=t; t=sx; sx=ex; ex=t; }
+    if(G.clipboard) free(G.clipboard);
+    size_t cap = 1024, len = 0;
+    G.clipboard = malloc(cap);
+    for(int y = sy; y <= ey; y++){
+        if(y < 0 || y >= CUR_ED.line_count) continue;
+        const char *line = CUR_ED.lines[y];
+        int line_len = (int)strlen(line);
+        int start_x = (y == sy) ? sx : 0;
+        int end_x = (y == ey) ? ex : line_len - 1;
+        for(int x = start_x; x <= end_x && x < line_len; x++){
+            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+            G.clipboard[len++] = line[x];
+        }
+        if(y < ey){
+            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+            G.clipboard[len++] = '\n';
+        }
+    }
+    G.clipboard[len] = '\0';
+    OK("Copied %d chars from editor", (int)len);
+}
+
+static void editor_delete_selection(void){
+    if(!G.ed_selecting) return;
+    int sy = G.ed_sel_start_y, sx = G.ed_sel_start_x;
+    int ey = G.ed_sel_end_y, ex = G.ed_sel_end_x;
+    if(sy > ey || (sy == ey && sx > ex)){ int t=sy; sy=ey; ey=t; t=sx; sx=ex; ex=t; }
+    if(sy < 0) sy = 0; if(ey >= CUR_ED.line_count) ey = CUR_ED.line_count - 1;
+    if(sy == ey){
+        char *line = CUR_ED.lines[sy];
+        int len = (int)strlen(line);
+        if(sx < 0) sx = 0; if(ex >= len) ex = len - 1;
+        memmove(line + sx, line + ex + 1, len - ex);
+    } else {
+        char *start_line = CUR_ED.lines[sy];
+        char *end_line = CUR_ED.lines[ey];
+        int start_len = (int)strlen(start_line);
+        int end_len = (int)strlen(end_line);
+        char *n = malloc(sx + (end_len - ex) + 1);
+        memcpy(n, start_line, sx);
+        memcpy(n + sx, end_line + ex + 1, end_len - ex);
+        n[sx + end_len - ex] = '\0';
+        free(CUR_ED.lines[sy]);
+        CUR_ED.lines[sy] = n;
+        for(int i = sy + 1; i <= ey; i++) free(CUR_ED.lines[i]);
+        for(int i = sy + 1; i < CUR_ED.line_count - (ey - sy); i++) CUR_ED.lines[i] = CUR_ED.lines[i + (ey - sy)];
+        CUR_ED.line_count -= (ey - sy);
+    }
+    CUR_ED.cur_y = sy; CUR_ED.cur_x = sx;
+    G.ed_selecting = false; CUR_ED.modified = true;
+}
+
+static void editor_cut_selection(void){
+    if(!G.ed_selecting) return;
+    action_copy_editor_selection();
+    editor_delete_selection();
 }
 
 /* ================================================================
@@ -2648,9 +2873,15 @@ static void handle_mouse(MouseEvt m){
     }
 
     if(right_cl){
-        /* ... */
+        if(G.focus == FOCUS_EDITOR){
+            menu_reset(m.col, m.row);
+            menu_add_item("Copy", action_copy_editor_selection);
+            menu_add_item("Cut", editor_cut_selection);
+            menu_add_item("Paste", editor_paste);
+            menu_add_item("Cancel", NULL);
+            return;
+        }
         menu_reset(m.col, m.row);
-        /* ... */
         menu_add_item("Cancel", NULL);
         return;
     }
@@ -2664,6 +2895,18 @@ static void handle_mouse(MouseEvt m){
     /* Right pane toggles (Diff / Editor) */
     int toggle_row = (G.current_view == VIEW_LOG) ? (ct + G.lh_log) : ct;
     int toggle_min_x = (G.current_view == VIEW_LOG) ? 1 : G.rx;
+    
+    /* Editor Tab Clicks */
+    if(cl && G.editor_active && m.row == toggle_row + 1 && m.col > toggle_min_x){
+        for(int i=0; i<G.tab_count; i++){
+            if(m.col >= G.tab_x[i] && (i == G.tab_count-1 ? m.col < G.cols : m.col < G.tab_x[i+1])){
+                G.tab_current = i;
+                G.focus = FOCUS_EDITOR;
+                return;
+            }
+        }
+    }
+
     if(cl && m.row == toggle_row && m.col > toggle_min_x){
         if(!G.editor_active){
             int unify_x = G.cols - 15;
@@ -2677,12 +2920,15 @@ static void handle_mouse(MouseEvt m){
     }
 
     if(cl && m.row==1){
-        if(m.col>=G.tab_x[0] && m.col<G.tab_x[1]) G.current_view=VIEW_STATUS;
-        else if(m.col>=G.tab_x[1] && m.col<G.tab_x[2]) G.current_view=VIEW_LOG;
-        else if(m.col>=G.tab_x[2] && m.col<G.tab_x[3]) G.current_view=VIEW_BRANCHES;
-        else if(m.col>=G.tab_x[3] && m.col<G.tab_x[4]) G.current_view=VIEW_STASH;
-        else if(m.col>=G.tab_x[4] && m.col<G.tab_x[5]) { G.current_view=VIEW_EDITOR; if(!G.browser_count) load_browser("."); G.focus=FOCUS_EDITOR; }
-        else if(m.col>=G.tab_x[5] && m.col<G.tab_x[6]) G.current_view=VIEW_HELP;
+        for(int i=0; i<5; i++){
+            if(m.col >= G.tab_x[i] && m.col < G.tab_x[i+1]){
+                static const View vmap[] = {VIEW_STATUS, VIEW_LOG, VIEW_BRANCHES, VIEW_STASH, VIEW_EDITOR};
+                G.current_view = vmap[i];
+                if(G.current_view == VIEW_EDITOR) { if(!G.browser_count) load_browser("."); G.focus = FOCUS_EDITOR; }
+                return;
+            }
+        }
+        if(m.col >= G.tab_x[5]) { G.current_view = VIEW_HELP; return; }
         return;
     }
     if(cl && (G.current_view == VIEW_STATUS || G.current_view == VIEW_LOG) && m.col > drx && m.row > dtop && m.row < G.rows-1){
@@ -2788,8 +3034,8 @@ static void handle_mouse(MouseEvt m){
             } else if(in_bot){
                 if(cl)G.focus=FOCUS_GRAPH;
                 int gvis=G.lh_gph-2;
-                if(su){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,gvis); sync_graph_preview(); }
-                if(sd){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,gvis); sync_graph_preview(); }
+                if(su){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,gvis,true); sync_graph_preview(); }
+                if(sd){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,gvis,true); sync_graph_preview(); }
                 if(cl){
                     int row_idx = m.row - (ct + G.lh_chg + 1);
                     if(row_idx >= 0 && row_idx < G.graph_rows_count){
@@ -2897,8 +3143,8 @@ static void handle_mouse(MouseEvt m){
             return;
         }
         if(in_log){
-            if(su){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis); sync_graph_preview(); }
-            if(sd){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis); sync_graph_preview(); }
+            if(su){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,-1,vis,true); sync_graph_preview(); }
+            if(sd){ msel(&G.commit_sel,&G.commit_scroll,G.commit_count,1,vis,true); sync_graph_preview(); }
             if(cl){
                 int t = G.commit_scroll+(m.row-ct-1);
                 if(t>=0&&t<G.commit_count){
@@ -2945,8 +3191,8 @@ static void handle_mouse(MouseEvt m){
         }
     } else if(G.current_view==VIEW_BRANCHES){
         int vis=G.rows-4;
-        if(su)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,-1,vis);
-        if(sd)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,1,vis);
+        if(su)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,-1,vis,false);
+        if(sd)msel(&G.branch_sel,&G.branch_scroll,G.branch_count,1,vis,false);
         if(cl){int t=G.branch_scroll+(m.row-ct-2);if(t>=0&&t<G.branch_count)G.branch_sel=t;}
     } else if(G.current_view==VIEW_STASH){
         if(su)G.stash_sel=imax(0,G.stash_sel-1);
@@ -3016,138 +3262,6 @@ static void action_copy_selection(void){
     OK("Copied %d chars", (int)len);
 }
 
-static void editor_insert_char(char c){
-    if(CUR_ED.line_count == 0){
-        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * 128);
-        CUR_ED.line_cap = 128;
-        CUR_ED.lines[CUR_ED.line_count++] = strdup("");
-    }
-    char *line = CUR_ED.lines[CUR_ED.cur_y];
-    int len = (int)strlen(line);
-    char *n = malloc(len + 2);
-    memcpy(n, line, CUR_ED.cur_x);
-    n[CUR_ED.cur_x] = c;
-    memcpy(n + CUR_ED.cur_x + 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x);
-    n[len + 1] = '\0';
-    free(line);
-    CUR_ED.lines[CUR_ED.cur_y] = n;
-    CUR_ED.cur_x++;
-    CUR_ED.modified = true;
-}
-
-static void editor_backspace(void){
-    if(CUR_ED.cur_x > 0){
-        char *line = CUR_ED.lines[CUR_ED.cur_y];
-        int len = (int)strlen(line);
-        memmove(line + CUR_ED.cur_x - 1, line + CUR_ED.cur_x, len - CUR_ED.cur_x + 1);
-        CUR_ED.cur_x--;
-        CUR_ED.modified = true;
-    } else if(CUR_ED.cur_y > 0){
-        /* Merge with previous line */
-        char *prev = CUR_ED.lines[CUR_ED.cur_y - 1];
-        char *curr = CUR_ED.lines[CUR_ED.cur_y];
-        int plen = (int)strlen(prev);
-        int clen = (int)strlen(curr);
-        char *n = malloc(plen + clen + 1);
-        memcpy(n, prev, plen);
-        memcpy(n + plen, curr, clen + 1);
-        free(prev); free(curr);
-        CUR_ED.lines[CUR_ED.cur_y - 1] = n;
-        for(int i=CUR_ED.cur_y; i<CUR_ED.line_count-1; i++) CUR_ED.lines[i] = CUR_ED.lines[i+1];
-        CUR_ED.line_count--;
-        CUR_ED.cur_y--;
-        CUR_ED.cur_x = plen;
-        CUR_ED.modified = true;
-    }
-}
-
-static void editor_newline(void){
-    char *line = CUR_ED.lines[CUR_ED.cur_y];
-    char *next = strdup(line + CUR_ED.cur_x);
-    line[CUR_ED.cur_x] = '\0';
-    if(CUR_ED.line_count >= CUR_ED.line_cap){
-        CUR_ED.line_cap = CUR_ED.line_cap ? CUR_ED.line_cap * 2 : 128;
-        CUR_ED.lines = realloc(CUR_ED.lines, sizeof(char*) * CUR_ED.line_cap);
-    }
-    for(int i=CUR_ED.line_count; i > CUR_ED.cur_y + 1; i--) CUR_ED.lines[i] = CUR_ED.lines[i-1];
-    CUR_ED.lines[CUR_ED.cur_y + 1] = next;
-    CUR_ED.line_count++;
-    CUR_ED.cur_y++;
-    CUR_ED.cur_x = 0;
-    CUR_ED.modified = true;
-}
-
-static void editor_goto_line(const char *lstr){
-    int l = atoi(lstr);
-    if(l > 0 && l <= CUR_ED.line_count){
-        CUR_ED.cur_y = l - 1;
-        CUR_ED.cur_x = 0;
-        OK("Jumped to line %d", l);
-    } else ERR("Invalid line number");
-}
-
-static void editor_find(const char *pattern){
-    if(!pattern || !pattern[0]) return;
-    for(int i=CUR_ED.cur_y; i<CUR_ED.line_count; i++){
-        char *line = CUR_ED.lines[i];
-        char *pos = strstr(i == CUR_ED.cur_y ? line + CUR_ED.cur_x + 1 : line, pattern);
-        if(pos){
-            CUR_ED.cur_y = i;
-            CUR_ED.cur_x = (int)(pos - line);
-            OK("Found: %s", pattern);
-            return;
-        }
-    }
-    for(int i=0; i<CUR_ED.cur_y; i++){
-        char *line = CUR_ED.lines[i];
-        char *pos = strstr(line, pattern);
-        if(pos){
-            CUR_ED.cur_y = i;
-            CUR_ED.cur_x = (int)(pos - line);
-            OK("Found (wrapped): %s", pattern);
-            return;
-        }
-    }
-    ERR("Not found: %s", pattern);
-}
-
-static void editor_paste(void){
-    if(!G.clipboard) return;
-    for(int i=0; G.clipboard[i]; i++){
-        if(G.clipboard[i] == '\n') editor_newline();
-        else editor_insert_char(G.clipboard[i]);
-    }
-}
-
-static void action_copy_editor_selection(void){
-    if(!G.ed_selecting) return;
-    int sy = G.ed_sel_start_y, sx = G.ed_sel_start_x;
-    int ey = G.ed_sel_end_y, ex = G.ed_sel_end_x;
-    if(sy > ey || (sy == ey && sx > ex)){
-        int t=sy; sy=ey; ey=t; t=sx; sx=ex; ex=t;
-    }
-    if(G.clipboard) free(G.clipboard);
-    size_t cap = 1024, len = 0;
-    G.clipboard = malloc(cap);
-    for(int y = sy; y <= ey; y++){
-        if(y < 0 || y >= CUR_ED.line_count) continue;
-        const char *line = CUR_ED.lines[y];
-        int line_len = (int)strlen(line);
-        int start_x = (y == sy) ? sx : 0;
-        int end_x = (y == ey) ? ex : line_len - 1;
-        for(int x = start_x; x <= end_x && x < line_len; x++){
-            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
-            G.clipboard[len++] = line[x];
-        }
-        if(y < ey){
-            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
-            G.clipboard[len++] = '\n';
-        }
-    }
-    G.clipboard[len] = '\0';
-    OK("Copied %d chars from editor", (int)len);
-}
-
 /* ================================================================
    MAIN KEY HANDLER
 ================================================================ */
@@ -3203,6 +3317,14 @@ static void handle_cli_key(Key k){
     }
 }
 
+static void begin_ed_selection(void){
+    if(!G.ed_selecting){
+        G.ed_selecting = true;
+        G.ed_sel_start_y = G.ed_sel_end_y = CUR_ED.cur_y;
+        G.ed_sel_start_x = G.ed_sel_end_x = CUR_ED.cur_x;
+    }
+}
+
 static void handle_key(Key k){
     if(k.type==KEY_MOUSE){handle_mouse(k.mouse);return;}
     if(G.menu_active){G.menu_active=false;return;}
@@ -3214,24 +3336,56 @@ static void handle_key(Key k){
     if(G.focus == FOCUS_EDITOR && k.type != KEY_TAB && k.type != KEY_SHIFT_TAB){
         switch(k.type){
         case KEY_UP:
+            G.ed_selecting = false;
             CUR_ED.cur_y = imax(0, CUR_ED.cur_y-1);
             { int l=(int)strlen(CUR_ED.lines[CUR_ED.cur_y]); if(CUR_ED.cur_x > l) CUR_ED.cur_x = l; }
             break;
         case KEY_DOWN:
+            G.ed_selecting = false;
             CUR_ED.cur_y = imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0, CUR_ED.cur_y+1);
             { int l=(int)strlen(CUR_ED.lines[CUR_ED.cur_y]); if(CUR_ED.cur_x > l) CUR_ED.cur_x = l; }
             break;
-        case KEY_LEFT: CUR_ED.cur_x = imax(0, CUR_ED.cur_x-1); break;
-        case KEY_RIGHT:CUR_ED.cur_x = imin(CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0, CUR_ED.cur_x+1); break;
-        case KEY_ENTER:editor_newline(); break;
-        case KEY_BACKSPACE:editor_backspace(); break;
+        case KEY_LEFT: G.ed_selecting = false; CUR_ED.cur_x = imax(0, CUR_ED.cur_x-1); break;
+        case KEY_RIGHT:G.ed_selecting = false; CUR_ED.cur_x = imin(CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0, CUR_ED.cur_x+1); break;
+        case KEY_SHIFT_UP:
+            begin_ed_selection();
+            CUR_ED.cur_y = imax(0, CUR_ED.cur_y-1);
+            G.ed_sel_end_y = CUR_ED.cur_y; G.ed_sel_end_x = CUR_ED.cur_x;
+            break;
+        case KEY_SHIFT_DOWN:
+            begin_ed_selection();
+            CUR_ED.cur_y = imin(CUR_ED.line_count>0?CUR_ED.line_count-1:0, CUR_ED.cur_y+1);
+            G.ed_sel_end_y = CUR_ED.cur_y; G.ed_sel_end_x = CUR_ED.cur_x;
+            break;
+        case KEY_SHIFT_LEFT:
+            begin_ed_selection();
+            CUR_ED.cur_x = imax(0, CUR_ED.cur_x-1);
+            G.ed_sel_end_y = CUR_ED.cur_y; G.ed_sel_end_x = CUR_ED.cur_x;
+            break;
+        case KEY_SHIFT_RIGHT:
+            begin_ed_selection();
+            CUR_ED.cur_x = imin(CUR_ED.lines[CUR_ED.cur_y] ? (int)strlen(CUR_ED.lines[CUR_ED.cur_y]) : 0, CUR_ED.cur_x+1);
+            G.ed_sel_end_y = CUR_ED.cur_y; G.ed_sel_end_x = CUR_ED.cur_x;
+            break;
+        case KEY_ENTER:
+            if(G.ed_selecting) editor_delete_selection();
+            editor_newline(); break;
+        case KEY_BACKSPACE:
+            if(G.ed_selecting) editor_delete_selection();
+            else editor_backspace(); break;
+        case KEY_DEL:
+            if(G.ed_selecting) editor_delete_selection();
+            else { CUR_ED.cur_x++; editor_backspace(); } break;
         case KEY_CTRL_S:editor_save(); break;
         case KEY_CTRL_V:editor_paste(); break;
+        case KEY_CTRL_X:editor_cut_selection(); break;
         case KEY_CTRL_W:editor_close_tab(); break;
         case KEY_F1: editor_prev_tab(); break;
         case KEY_F2: editor_next_tab(); break;
-        case KEY_CHAR: editor_insert_char(k.ch); break;
-        case KEY_ESC: G.focus = (G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES); break;
+        case KEY_CHAR: 
+            if(G.ed_selecting) editor_delete_selection();
+            editor_insert_char(k.ch); break;
+        case KEY_ESC: G.ed_selecting = false; G.focus = (G.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES); break;
         default: break;
         }
         return;
@@ -3302,18 +3456,19 @@ static void handle_key(Key k){
                     GitCommit *c = &G.commits[G.commit_sel];
                     if(G.graph_file_sel > 0){
                         editor_load(c->files[G.graph_file_sel]); G.editor_active = true; G.focus = FOCUS_EDITOR;
-                    } else { G.editor_active = !G.editor_active; }
-                } else { G.editor_active = !G.editor_active; }
+                    } else { G.editor_active = !G.editor_active; if(!G.editor_active) { G.focus = FOCUS_CHANGES; update_diff(); } }
+                } else { G.editor_active = !G.editor_active; if(!G.editor_active) { G.focus = FOCUS_CHANGES; update_diff(); } }
             } else if(G.current_view == VIEW_LOG){
                 if(!G.editor_active && G.commit_count > 0){
                     GitCommit *c = &G.commits[G.commit_sel];
                     if(G.graph_file_sel > 0) editor_load(c->files[G.graph_file_sel]);
                     else if(c->hash[0]) {
                         /* Maybe load a commit summary? For now just toggle */
-                        G.editor_active = true;
+                        G.editor_active = true; G.focus = FOCUS_EDITOR;
                     }
                 }
                 G.editor_active = !G.editor_active;
+                if(!G.editor_active) { G.focus = FOCUS_CHANGES; update_diff(); }
             }
             return;
         case 'b':
@@ -3408,10 +3563,10 @@ static void handle_key(Key k){
         if(G.focus==FOCUS_CHANGES){
             int cnt=G.file_count;
             switch(k.type){
-            case KEY_UP:   msel(&G.file_sel,&G.file_scroll,cnt,-1,vis);break;
-            case KEY_DOWN: msel(&G.file_sel,&G.file_scroll,cnt, 1,vis);break;
-            case KEY_PGUP: msel(&G.file_sel,&G.file_scroll,cnt,-vis/2,vis);break;
-            case KEY_PGDN: msel(&G.file_sel,&G.file_scroll,cnt, vis/2,vis);break;
+            case KEY_UP:   msel(&G.file_sel,&G.file_scroll,cnt,-1,vis,false);break;
+            case KEY_DOWN: msel(&G.file_sel,&G.file_scroll,cnt, 1,vis,false);break;
+            case KEY_PGUP: msel(&G.file_sel,&G.file_scroll,cnt,-vis/2,vis,false);break;
+            case KEY_PGDN: msel(&G.file_sel,&G.file_scroll,cnt, vis/2,vis,false);break;
             case KEY_HOME: G.file_sel=0;G.file_scroll=0;break;
             case KEY_END:  G.file_sel=cnt>0?cnt-1:0;break;
             case KEY_ENTER:G.focus=FOCUS_DIFF;break;
@@ -3440,7 +3595,7 @@ static void handle_key(Key k){
                     G.graph_file_sel--;
                 } else {
                     int old_sel = G.commit_sel;
-                    msel(&G.commit_sel, &G.commit_scroll, cnt, -1, gvis);
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, -1, gvis, true);
                     if(old_sel != G.commit_sel && G.commits[G.commit_sel].expanded && G.commits[G.commit_sel].f_count > 0) {
                         G.graph_file_sel = G.commits[G.commit_sel].f_count - 1;
                     }
@@ -3452,13 +3607,13 @@ static void handle_key(Key k){
                 if(c->expanded && G.graph_file_sel < c->f_count - 1) {
                     G.graph_file_sel++;
                 } else {
-                    msel(&G.commit_sel, &G.commit_scroll, cnt, 1, gvis);
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, 1, gvis, true);
                     G.graph_file_sel = -1;
                 }
                 break;
             }
-            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-gvis/2,gvis); G.graph_file_sel=-1; break;
-            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, gvis/2,gvis); G.graph_file_sel=-1; break;
+            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-gvis/2,gvis,true); G.graph_file_sel=-1; break;
+            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, gvis/2,gvis,true); G.graph_file_sel=-1; break;
             case KEY_HOME: G.commit_sel=0;G.commit_scroll=0;G.graph_file_sel=-1; break;
             case KEY_END:  G.commit_sel=cnt?cnt-1:0; G.graph_file_sel=-1; break;
             case KEY_ENTER:
@@ -3596,7 +3751,7 @@ static void handle_key(Key k){
                     G.graph_file_sel--;
                 } else {
                     int old_sel = G.commit_sel;
-                    msel(&G.commit_sel, &G.commit_scroll, cnt, -1, lh);
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, -1, lh, true);
                     if(old_sel != G.commit_sel && G.commits[G.commit_sel].expanded && G.commits[G.commit_sel].f_count > 0) {
                         G.graph_file_sel = G.commits[G.commit_sel].f_count - 1;
                     }
@@ -3608,13 +3763,13 @@ static void handle_key(Key k){
                 if(c->expanded && G.graph_file_sel < c->f_count - 1) {
                     G.graph_file_sel++;
                 } else {
-                    msel(&G.commit_sel, &G.commit_scroll, cnt, 1, lh);
+                    msel(&G.commit_sel, &G.commit_scroll, cnt, 1, lh, true);
                     G.graph_file_sel = -1;
                 }
                 break;
             }
-            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-lh/2,lh); G.graph_file_sel=-1; break;
-            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, lh/2,lh); G.graph_file_sel=-1; break;
+            case KEY_PGUP: msel(&G.commit_sel,&G.commit_scroll,cnt,-lh/2,lh,true); G.graph_file_sel=-1; break;
+            case KEY_PGDN: msel(&G.commit_sel,&G.commit_scroll,cnt, lh/2,lh,true); G.graph_file_sel=-1; break;
             case KEY_HOME: G.commit_sel=0;G.commit_scroll=0; G.graph_file_sel=-1; break;
             case KEY_END:  G.commit_sel=cnt?cnt-1:0; G.graph_file_sel=-1; break;
             case KEY_ENTER:
@@ -3722,10 +3877,10 @@ static void handle_key(Key k){
     case VIEW_BRANCHES:{
         int cnt=G.branch_count;
         switch(k.type){
-        case KEY_UP:   msel(&G.branch_sel,&G.branch_scroll,cnt,-1,vis);break;
-        case KEY_DOWN: msel(&G.branch_sel,&G.branch_scroll,cnt, 1,vis);break;
-        case KEY_PGUP: msel(&G.branch_sel,&G.branch_scroll,cnt,-vis/2,vis);break;
-        case KEY_PGDN: msel(&G.branch_sel,&G.branch_scroll,cnt, vis/2,vis);break;
+        case KEY_UP:   msel(&G.branch_sel,&G.branch_scroll,cnt,-1,vis,false);break;
+        case KEY_DOWN: msel(&G.branch_sel,&G.branch_scroll,cnt, 1,vis,false);break;
+        case KEY_PGUP: msel(&G.branch_sel,&G.branch_scroll,cnt,-vis/2,vis,false);break;
+        case KEY_PGDN: msel(&G.branch_sel,&G.branch_scroll,cnt, vis/2,vis,false);break;
         case KEY_HOME: G.branch_sel=0;G.branch_scroll=0;break;
         case KEY_END:  G.branch_sel=cnt>0?cnt-1:0;break;
         case KEY_ENTER:action_checkout();break;
@@ -3739,8 +3894,8 @@ static void handle_key(Key k){
         int cnt=G.stash_count;
         int dummy=0;
         switch(k.type){
-        case KEY_UP:   msel(&G.stash_sel,&dummy,cnt,-1,vis);break;
-        case KEY_DOWN: msel(&G.stash_sel,&dummy,cnt, 1,vis);break;
+        case KEY_UP:   msel(&G.stash_sel,&dummy,cnt,-1,vis,false);break;
+        case KEY_DOWN: msel(&G.stash_sel,&dummy,cnt, 1,vis,false);break;
         case KEY_ENTER:action_apply_stash();break;
         case KEY_CHAR:
             if(k.ch=='p')action_pop_stash();
