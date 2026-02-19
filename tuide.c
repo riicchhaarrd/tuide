@@ -321,6 +321,8 @@ typedef struct {
     bool dragging_col_hash, dragging_col_author, dragging_col_date;
     int  col_hash_w, col_author_w, col_date_w;
     int  sc_y, sc_h, sc_total, sc_vis, sc_drag_offset;
+    bool dragging_ed_sc;
+    int  ed_sc_x, ed_sc_y, ed_sc_h, ed_sc_total, ed_sc_vis, ed_sc_drag_offset;
     int  tab_x[7];
     int  ed_tab_x[MAX_TABS+1]; /* Editor tab bar click positions */
 
@@ -2290,7 +2292,7 @@ static void draw_editor(int top, int rx, int rw, int h){
     if(ed->cur_y < ed->scroll_y) ed->scroll_y = ed->cur_y;
     if(ed->cur_y >= ed->scroll_y + vis) ed->scroll_y = ed->cur_y - vis + 1;
 
-    int vis_w = rw - 8;
+    int vis_w = rw - 10;
     if(ed->cur_x < ed->scroll_x) ed->scroll_x = ed->cur_x;
     if(ed->cur_x >= ed->scroll_x + vis_w) ed->scroll_x = ed->cur_x - vis_w + 1;
 
@@ -2320,7 +2322,7 @@ static void draw_editor(int top, int rx, int rw, int h){
         int comment_start = in_comment ? (int)(strstr(full_line, "//") - full_line) : -1;
 
         char buf[512]; int bi=0;
-        for(int j=0; j<=len && cur_c < rx+rw-1; j++){
+        for(int j=0; j<=len && cur_c < rx+rw-3; j++){
             char c = line_buf[j];
             int real_j = j + start;
             if(isspace((unsigned char)c) || ispunct((unsigned char)c) || c == '\0'){
@@ -2352,7 +2354,7 @@ static void draw_editor(int top, int rx, int rw, int h){
         /* Cursor: solid block when focused, underline when not focused */
         if(i == ed->cur_y){
             int cursor_screen_x = rx+7+ed->cur_x - ed->scroll_x;
-            if(cursor_screen_x >= rx+7 && cursor_screen_x < rx+rw-1){
+            if(cursor_screen_x >= rx+7 && cursor_screen_x < rx+rw-3){
                 at(row, cursor_screen_x);
                 char c = (ed->lines[i] && ed->lines[i][ed->cur_x]) ? ed->lines[i][ed->cur_x] : ' ';
                 char cs[2] = {c, 0};
@@ -2374,8 +2376,55 @@ static void draw_editor(int top, int rx, int rw, int h){
         row++;
     }
 
-    /* Scrollbars */
-    draw_scrollbar(top+2, rx+rw-1, h-4, ed->line_count, h-4, ed->scroll_y, act);
+    /* Minimap Scrollbar (3-wide, matches diff style) */
+    {
+        int vis_rows = h - 4;
+        if(ed->line_count > vis_rows && vis_rows > 2){
+            int bh = imax(1, (vis_rows * vis_rows) / ed->line_count);
+            int maxsc_ed = imax(1, ed->line_count - vis_rows);
+            int bpos = (ed->scroll_y * (vis_rows - bh)) / maxsc_ed;
+            G.ed_sc_x = rx + rw - 3;
+            G.ed_sc_y = top + 2;
+            G.ed_sc_h = vis_rows;
+            G.ed_sc_total = ed->line_count;
+            G.ed_sc_vis = vis_rows;
+
+            /* Minimap markers: 1=cursor line, 2=selection */
+            char markers[2048] = {0};
+            if(vis_rows < 2048){
+                int cr = (ed->cur_y * vis_rows) / ed->line_count;
+                if(cr >= 0 && cr < vis_rows) markers[cr] |= 1;
+                if(G.ed_selecting){
+                    int sy1 = imin(G.ed_sel_start_y, G.ed_sel_end_y);
+                    int sy2 = imax(G.ed_sel_start_y, G.ed_sel_end_y);
+                    for(int i = sy1; i <= sy2 && i < ed->line_count; i++){
+                        int r = (i * vis_rows) / ed->line_count;
+                        if(r >= 0 && r < vis_rows) markers[r] |= 2;
+                    }
+                }
+            }
+
+            for(int r = 0; r < vis_rows; r++){
+                bool thumb = (r >= bpos && r < bpos + bh);
+                for(int sw = 0; sw < 3; sw++){
+                    at(top+2+r, rx+rw-1-sw);
+                    if(thumb){
+                        if(G.dragging_ed_sc) cfg(TH->fg_sel);
+                        else if(G.last_mx >= rx+rw-3) cfg(TH->fg_accent1);
+                        else cfg(TH->fg_accent2);
+                        put_cell(top+2+r, rx+rw-1-sw, "█");
+                    } else {
+                        if(markers[r] & 2){ cfg(TH->bg_sel); put_cell(top+2+r, rx+rw-1-sw, "▒"); }
+                        else if(markers[r] & 1){ cfg(TH->fg_accent1); put_cell(top+2+r, rx+rw-1-sw, "▒"); }
+                        else { cfg(TH->fg_dim); put_cell(top+2+r, rx+rw-1-sw, sw==0?"│":" "); }
+                    }
+                }
+            }
+            rst();
+        } else {
+            G.ed_sc_h = 0;
+        }
+    }
     
     /* Horizontal scrollbar line */
     at(top+h-2, rx+1); cbg(TH->bg_panel);
@@ -3016,7 +3065,7 @@ static void handle_mouse(MouseEvt m){
     if(m.release){
         G.dragging_v=false; G.dragging_h=false; G.dragging_sc=false; G.dragging_diff=false;
         G.dragging_col_hash=false; G.dragging_col_author=false; G.dragging_col_date=false;
-        G.dragging_h_log=false;
+        G.dragging_h_log=false; G.dragging_ed_sc=false;
     }
 
     if(G.menu_active){
@@ -3051,6 +3100,16 @@ static void handle_mouse(MouseEvt m){
             if(max_bpos > 0){
                 int bpos = iclamp(rel_y - G.sc_drag_offset, 0, max_bpos);
                 G.diff_scroll = (bpos * (G.sc_total - G.sc_vis)) / max_bpos;
+            }
+            return;
+        }
+        if(G.dragging_ed_sc && G.ed_sc_h > 0 && G.tab_count > 0){
+            int rel_y = m.row - G.ed_sc_y;
+            int bh = imax(1, (G.ed_sc_vis * G.ed_sc_vis) / G.ed_sc_total);
+            int max_bpos = G.ed_sc_h - bh;
+            if(max_bpos > 0){
+                int bpos = iclamp(rel_y - G.ed_sc_drag_offset, 0, max_bpos);
+                CUR_ED.scroll_y = (bpos * (G.ed_sc_total - G.ed_sc_vis)) / max_bpos;
             }
             return;
         }
