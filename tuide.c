@@ -886,11 +886,6 @@ static void sync_graph_preview(void){
 
 static void reload_all(void){
     load_branch(); load_status(); load_log(); load_branches(); load_stash();
-    /* Auto-expand the currently selected commit in the graph */
-    if(G.commit_count > 0){
-        G.commits[G.commit_sel].expanded = true;
-        fetch_commit_files(G.commit_sel);
-    }
     update_diff(); OK("Refreshed");
 }
 
@@ -2865,8 +2860,7 @@ static void msel(int *sel,int *scr,int cnt,int d,int vis, bool is_graph){
     if(*sel<*scr)*scr=*sel;
     if(*sel>=*scr+vis)*scr=*sel-vis+1;
     if(is_graph && cnt > 0){
-        G.commits[*sel].expanded = true;
-        fetch_commit_files(*sel);
+        if(G.commits[*sel].expanded) fetch_commit_files(*sel);
         sync_graph_preview();
     }
 }
@@ -3395,10 +3389,8 @@ static void handle_mouse(MouseEvt m){
                                 G.commits[ci].expanded = !G.commits[ci].expanded;
                                 if(G.commits[ci].expanded) fetch_commit_files(ci);
                             } else {
-                                /* Auto-expand on commit row click */
                                 G.graph_file_sel = -1;
-                                G.commits[ci].expanded = true;
-                                fetch_commit_files(ci);
+                                if(G.commits[ci].expanded) fetch_commit_files(ci);
                                 snprintf(G.diff_title,sizeof(G.diff_title),"commit %s: %s",G.commits[ci].hash,G.commits[ci].subject);
                                 G.diff_is_summary = false; load_diff_commit(G.commits[ci].hash);
                             }
