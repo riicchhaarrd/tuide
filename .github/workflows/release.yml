@@ -20,8 +20,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
-          install: mingw-w64-x86_64-gcc make zip
+          msystem: MSYS
+          install: gcc make zip
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
@@ -76,6 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
           files: |
             dist/**/*.tar.gz
             dist/**/*.zip
