@@ -490,7 +490,28 @@ static void draw_flush(void){
     fflush(stdout);
 }
 
-static void ppad(const char *s,int w){
+/* Selection check for diff */
+static bool is_selected(int y, int x){
+    if(!G.selecting) return false;
+    int s_y = G.sel_start_y, s_x = G.sel_start_x;
+    int e_y = G.sel_end_y, e_x = G.sel_end_x;
+    if(s_y > e_y || (s_y == e_y && s_x > e_x)){
+        int t=s_y; s_y=e_y; e_y=t;
+        t=s_x; s_x=e_x; e_x=t;
+    }
+    if(y < s_y || y > e_y) return false;
+    if(G.diff_sidebyside){
+        int h = G.diff_split;
+        bool s_left = (s_x < h), e_left = (e_x < h);
+        if(s_left && e_left && x >= h) return false;
+        if(!s_left && !e_left && x < h) return false;
+    }
+    if(y == s_y && x < s_x) return false;
+    if(y == e_y && x > e_x) return false;
+    return true;
+}
+
+static void ppad_ext(const char *s, int w, int y_idx, int pane_rx){
     if(w<=0)return;
     int vis=0;
     int actual_len = 0;
@@ -536,15 +557,46 @@ static void ppad(const char *s,int w){
         
         char tmp[8] = {0};
         for(int i=0; i<len && *s; i++) tmp[i] = *s++;
-        put_cell(G.cur_r, G.cur_c, tmp);
+        
+        bool sel = false;
+        if (y_idx != -1) {
+            int abs_x = G.cur_c - (pane_rx + 1);
+            if (is_selected(y_idx, abs_x)) sel = true;
+        }
+
+        if (sel) {
+            Color old_bg = G.cur_bg;
+            cbg(TH->bg_sel);
+            put_cell(G.cur_r, G.cur_c, tmp);
+            cbg(old_bg);
+        } else {
+            put_cell(G.cur_r, G.cur_c, tmp);
+        }
         G.cur_c++; vis++;
     }
     if(truncated && w >= 1){
         put_cell(G.cur_r, G.cur_c, "…");
         G.cur_c++; vis++;
     }
-    while(vis<w){put_cell(G.cur_r, G.cur_c, " "); G.cur_c++; vis++;}
+    while(vis<w){
+        bool sel = false;
+        if (y_idx != -1) {
+            int abs_x = G.cur_c - (pane_rx + 1);
+            if (is_selected(y_idx, abs_x)) sel = true;
+        }
+        if (sel) {
+            Color old_bg = G.cur_bg;
+            cbg(TH->bg_sel);
+            put_cell(G.cur_r, G.cur_c, " ");
+            cbg(old_bg);
+        } else {
+            put_cell(G.cur_r, G.cur_c, " ");
+        }
+        G.cur_c++; vis++;
+    }
 }
+
+static void ppad(const char *s,int w){ ppad_ext(s, w, -1, 0); }
 
 static void layout(void){
     G.sidebar_w = 10;
@@ -580,6 +632,7 @@ static void sig_int(int s){(void)s;G.running=false;}
    DATA LOADING
 ================================================================ */
 static void fetch_commit_files(int idx); /* forward declaration */
+static void action_copy_selection(void);
 static void load_branch(void){
     char *o=git_run("git rev-parse --abbrev-ref HEAD 2>/dev/null");
     if(o){strtrim(o);snprintf(G.branch_name,sizeof(G.branch_name),"%s",o);free(o);}
@@ -1367,43 +1420,9 @@ static bool is_ed_selected(int y, int x){
     return true;
 }
 
-/* Selection check for diff */
-static bool is_selected(int y, int x){
-    if(!G.selecting) return false;
-    int s_y = G.sel_start_y, s_x = G.sel_start_x;
-    int e_y = G.sel_end_y, e_x = G.sel_end_x;
-    if(s_y > e_y || (s_y == e_y && s_x > e_x)){
-        int t=s_y; s_y=e_y; e_y=t;
-        t=s_x; s_x=e_x; e_x=t;
-    }
-    if(y < s_y || y > e_y) return false;
-    if(y == s_y && x < s_x) return false;
-    if(y == e_y && x > e_x) return false;
-    return true;
-}
-
-static void draw_diff_line_with_sel(int r, int c, int w, const char *s, int y_idx, int x_off){
-    at(r, c);
-    int len = (int)strlen(s);
-    for(int i=0; i<w-1; i++){
-        int char_idx = i + x_off;
-        if(char_idx < len){
-            if(is_selected(y_idx, char_idx)){
-                Color old_bg = G.cur_bg;
-                cbg(TH->bg_sel);
-                char tmp[2] = {s[char_idx], 0};
-                put_cell(r, c+i, tmp);
-                cbg(old_bg);
-            } else {
-                char tmp[2] = {s[char_idx], 0};
-                put_cell(r, c+i, tmp);
-            }
-        } else {
-            put_cell(r, c+i, " ");
-        }
-    }
-}
-
+/* ================================================================
+   DIFF PANE (side-by-side + unified)
+================================================================ */
 static void draw_diff(int top,int rx,int rw,int h){
     if(h<=2) return;
     bool act=(G.focus==FOCUS_DIFF);
@@ -1461,32 +1480,32 @@ static void draw_diff(int top,int rx,int rw,int h){
             char lno[16];
             switch(dl->type){
             case 0: /* Context */
-                cbg(TH->bg_base);cfg(TH->fg_linenum);snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);ppad(lno,lnum_w+1);
-                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); draw_diff_line_with_sel(row,rx+lnum_w+3,code_w,dl->old_line,di,0); break;
+                cbg(TH->bg_base);cfg(TH->fg_linenum);snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);ppad_ext(lno,lnum_w+1,di,rx);
+                cfg(TH->fg_dim); ppad_ext("│", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->old_line,code_w,di,rx); break;
             case 1: /* Added */
-                cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);
-                cfg(TH->fg_ok); ppad("+", 1); cfg(TH->fg_diff_add);G.cur_bold=true;draw_diff_line_with_sel(row,rx+lnum_w+3,code_w-1,dl->new_line,di,0);break;
+                cbg(TH->bg_diff_add);cfg(TH->fg_linenum);if(dl->new_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad_ext(lno,lnum_w+1,di,rx);
+                cfg(TH->fg_ok); ppad_ext("+", 1, di, rx); cfg(TH->fg_diff_add);G.cur_bold=true;ppad_ext(dl->new_line,code_w-1,di,rx);break;
             case 2: /* Deleted */
-                cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad(lno,lnum_w+1);
-                cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del);G.cur_bold=true;draw_diff_line_with_sel(row,rx+lnum_w+3,code_w-1,dl->old_line,di,0);break;
+                cbg(TH->bg_diff_del);cfg(TH->fg_linenum);if(dl->old_lno>0)snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno);else snprintf(lno,sizeof(lno),"%*s ",lnum_w,"");ppad_ext(lno,lnum_w+1,di,rx);
+                cfg(TH->fg_err); ppad_ext("-", 1, di, rx); cfg(TH->fg_diff_del);G.cur_bold=true;ppad_ext(dl->old_line,code_w-1,di,rx);break;
             case 3: /* Hunk header */
                 cbg(TH->bg_diff_hdr);cfg(TH->fg_accent3);G.cur_bold=true;
                 char hsub[LINE_MAX_LEN]; char *hs = strstr(dl->new_line, "@@"); 
                 if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                 snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
-                ppad(hsub, rw-2); break;
+                ppad_ext(hsub, rw-2, di, rx); break;
             case 4: /* File header */
-                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad(dl->new_line[0]?dl->new_line:dl->old_line,rw-2);break;
+                cbg(TH->bg_header);cfg(TH->fg_accent2);G.cur_bold=true;ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line,rw-2,di,rx);break;
             case 5: /* Commit summary file list item */ {
                 bool sel = (G.diff_is_summary && G.diff_sel == di && act);
                 if(sel) { cbg(TH->bg_sel); cfg(TH->fg_sel); G.cur_bold=true; }
                 else { cbg(TH->bg_base); cfg(TH->fg_accent1); }
                 char fbuf[LINE_MAX_LEN+4]; snprintf(fbuf, sizeof(fbuf), "  → %s", dl->new_line);
-                ppad(fbuf, rw-2); break;
+                ppad_ext(fbuf, rw-2, di, rx); break;
             }
             case 6: /* Metadata / Info */
                 cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
-                ppad(dl->new_line[0] ? dl->new_line : dl->old_line, rw-2);
+                ppad_ext(dl->new_line[0] ? dl->new_line : dl->old_line, rw-2, di, rx);
                 G.cur_italic=false; break;
             }
             rst();
@@ -1503,30 +1522,30 @@ static void draw_diff(int top,int rx,int rw,int h){
                     if(hs) { hs = strstr(hs+2, "@@"); if(hs) hs += 2; }
                     snprintf(hsub, sizeof(hsub), "  %s", hs?hs:dl->new_line);
                     G.cur_bold=true; 
-                    ppad(hsub, half-1);
+                    ppad_ext(hsub, half-1, di, rx);
                     at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
-                    at(row, rx+half+1); cbg(TH->bg_diff_hdr); ppad("", (rw-half)-1);
+                    at(row, rx+half+1); cbg(TH->bg_diff_hdr); ppad_ext("", (rw-half)-1, di, rx);
                 } else if(dl->type==4) {
                     cbg(TH->bg_header);cfg(TH->fg_accent2); G.cur_bold=true;
-                    ppad(dl->new_line[0]?dl->new_line:dl->old_line, half-1);
+                    ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line, half-1, di, rx);
                     at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
-                    at(row, rx+half+1); cbg(TH->bg_header); ppad("", (rw-half)-1);
+                    at(row, rx+half+1); cbg(TH->bg_header); ppad_ext("", (rw-half)-1, di, rx);
                 } else {
                     cbg(TH->bg_panel); cfg(TH->fg_dim); G.cur_italic=true;
-                    ppad(dl->new_line[0]?dl->new_line:dl->old_line, half-1);
+                    ppad_ext(dl->new_line[0]?dl->new_line:dl->old_line, half-1, di, rx);
                     at(row, rx+half); cfg(TH->fg_dim); put_cell(row, rx+half, "│");
-                    at(row, rx+half+1); cbg(TH->bg_panel); ppad("", (rw-half)-1);
+                    at(row, rx+half+1); cbg(TH->bg_panel); ppad_ext("", (rw-half)-1, di, rx);
                     G.cur_italic=false;
                 }
                 rst(); di++; row++; continue;
             }
             if(dl->type==0){
                 at(row,rx+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
-                char lno[16]; snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad(lno, lnum_w+1);
-                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->old_line,code_w_left);
+                char lno[16]; snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->old_lno); ppad_ext(lno, lnum_w+1, di, rx);
+                cfg(TH->fg_dim); ppad_ext("│", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->old_line,code_w_left, di, rx);
                 at(row,rx+half+1); cbg(TH->bg_base); cfg(TH->fg_linenum);
-                snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno); ppad(lno, lnum_w+1);
-                cfg(TH->fg_dim); ppad("│", 1); cfg(TH->fg_diff_ctx); ppad(dl->new_line,code_w_right);
+                snprintf(lno,sizeof(lno),"%*d ",lnum_w,dl->new_lno); ppad_ext(lno, lnum_w+1, di, rx);
+                cfg(TH->fg_dim); ppad_ext("│", 1, di, rx); cfg(TH->fg_diff_ctx); ppad_ext(dl->new_line,code_w_right, di, rx);
                 rst(); di++; row++; continue;
             }
             /* Handle blocks of deletions and additions */
@@ -1545,12 +1564,12 @@ static void draw_diff(int top,int rx,int rw,int h){
                     if (od) {
                         cbg(TH->bg_diff_del); cfg(TH->fg_linenum);
                         char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, od->old_lno);
-                        ppad(lno, lnum_w + 1); cfg(TH->fg_err); ppad("-", 1); cfg(TH->fg_diff_del); G.cur_bold = true; ppad(od->old_line, code_w_left);
+                        ppad_ext(lno, lnum_w + 1, di + i, rx); cfg(TH->fg_err); ppad_ext("-", 1, di + i, rx); cfg(TH->fg_diff_del); G.cur_bold = true; ppad_ext(od->old_line, code_w_left, di + i, rx);
                     } else {
                         cbg(TH->bg_panel); cfg(TH->fg_dim);
-                        for (int j = 0; j < lnum_w + 1; j++) put_cell(row, rx + 1 + j, " ");
-                        put_cell(row, rx + 1 + lnum_w + 1, "┆");
-                        for (int j = 0; j < code_w_left; j++) put_cell(row, rx + 1 + lnum_w + 2 + j, " ");
+                        ppad_ext("", lnum_w + 1, -1, rx);
+                        ppad_ext("┆", 1, -1, rx);
+                        ppad_ext("", code_w_left, -1, rx);
                     }
                     rst();
 
@@ -1559,12 +1578,12 @@ static void draw_diff(int top,int rx,int rw,int h){
                     if (nd) {
                         cbg(TH->bg_diff_add); cfg(TH->fg_linenum);
                         char lno[16]; snprintf(lno, sizeof(lno), "%*d ", lnum_w, nd->new_lno);
-                        ppad(lno, lnum_w + 1); cfg(TH->fg_ok); ppad("+", 1); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold = true; ppad(nd->new_line, code_w_right);
+                        ppad_ext(lno, lnum_w + 1, di + ndel + i, rx); cfg(TH->fg_ok); ppad_ext("+", 1, di + ndel + i, rx); cfg(TH->bg_diff_add); cfg(TH->fg_diff_add); G.cur_bold = true; ppad_ext(nd->new_line, code_w_right, di + ndel + i, rx);
                     } else {
                         cbg(TH->bg_panel); cfg(TH->fg_dim);
-                        for (int j = 0; j < lnum_w + 1; j++) put_cell(row, rx + half + 1 + j, " ");
-                        put_cell(row, rx + half + 1 + lnum_w + 1, "┆");
-                        for (int j = 0; j < code_w_right; j++) put_cell(row, rx + half + 1 + lnum_w + 2 + j, " ");
+                        ppad_ext("", lnum_w + 1, -1, rx);
+                        ppad_ext("┆", 1, -1, rx);
+                        ppad_ext("", code_w_right, -1, rx);
                     }
                     rst();
                 }
@@ -3206,6 +3225,7 @@ static void handle_mouse(MouseEvt m){
             return;
         }
         menu_reset(m.col, m.row);
+        if(G.selecting) menu_add_item("Copy", action_copy_selection);
         menu_add_item("Cancel", NULL);
         return;
     }
@@ -3285,6 +3305,7 @@ static void handle_mouse(MouseEvt m){
             G.selecting = true;
             G.sel_start_y = G.sel_end_y = G.diff_scroll + (m.row - (dtop+1));
             G.sel_start_x = G.sel_end_x = m.col - drx - 1;
+            G.focus = FOCUS_DIFF;
         }
     } else if(cl){
         G.selecting = false;
@@ -3585,17 +3606,57 @@ static void action_copy_selection(void){
     if(G.clipboard) free(G.clipboard);
     size_t cap = 1024, len = 0;
     G.clipboard = malloc(cap);
+    
+    int lnum_w = 4;
+    int half = G.diff_split;
+
     for(int y = sy; y <= ey; y++){
         if(y < 0 || y >= G.diff_count) continue;
-        const char *line = G.diff_lines[y].new_line;
-        int line_len = (int)strlen(line);
-        int start_x = (y == sy) ? sx : 0;
-        int end_x = (y == ey) ? ex : line_len - 1;
-        for(int x = start_x; x <= end_x && x < line_len; x++){
-            if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
-            G.clipboard[len++] = line[x];
+        DiffLine *dl = &G.diff_lines[y];
+        
+        bool line_added = false;
+        if(!G.diff_sidebyside){
+            const char *s = (dl->type == 2) ? dl->old_line : dl->new_line;
+            int code_start = lnum_w + 2;
+            for(int i=0; s[i]; i++){
+                int x = code_start + i;
+                if(is_selected(y, x)){
+                    if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+                    G.clipboard[len++] = s[i];
+                    line_added = true;
+                }
+            }
+        } else {
+            /* Side-by-side: Left column */
+            const char *s_old = dl->old_line;
+            int code_start_old = lnum_w + 2;
+            for(int i=0; s_old[i]; i++){
+                int x = code_start_old + i;
+                if(is_selected(y, x)){
+                    if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+                    G.clipboard[len++] = s_old[i];
+                    line_added = true;
+                }
+            }
+            /* Divider */
+            if(is_selected(y, half - 1)){
+                if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+                G.clipboard[len++] = '|';
+                line_added = true;
+            }
+            /* Right column */
+            const char *s_new = dl->new_line;
+            int code_start_new = half + lnum_w + 2;
+            for(int i=0; s_new[i]; i++){
+                int x = code_start_new + i;
+                if(is_selected(y, x)){
+                    if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
+                    G.clipboard[len++] = s_new[i];
+                    line_added = true;
+                }
+            }
         }
-        if(y < ey){
+        if(y < ey && line_added){
             if(len + 2 >= cap){ cap *= 2; G.clipboard = realloc(G.clipboard, cap); }
             G.clipboard[len++] = '\n';
         }
