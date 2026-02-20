@@ -1,4 +1,4 @@
-#include "strings.h"
+#include "ui_strings.h"
 
 static const UiHelpEntry UI_EN_HELP[] = {
 	{"NAVIGATION", ""},

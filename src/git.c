@@ -10,7 +10,7 @@
 
 #include "render.h" /* For draw_flush if needed, though we use draw() from ui.h now */
 #include "state.h"
-#include "strings.h"
+#include "ui_strings.h"
 #include "ui.h"
 #include "util.h"
 #include "views.h"

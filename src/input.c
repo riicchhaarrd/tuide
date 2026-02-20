@@ -12,7 +12,7 @@
 #include "git.h"
 #include "render.h" /* for draw_flush in action_push/pull if needed, but actions are in git.c */
 #include "state.h"
-#include "strings.h"
+#include "ui_strings.h"
 #include "ui.h"
 #include "util.h"
 #include "views.h"

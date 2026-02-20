@@ -11,7 +11,7 @@
 
 #include "git.h"
 #include "render.h"
-#include "strings.h"
+#include "ui_strings.h"
 #include "views.h"
 
 void set_status(bool err, const char *fmt, ...) {

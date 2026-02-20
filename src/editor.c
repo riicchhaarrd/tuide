@@ -12,7 +12,7 @@
 
 #include "render.h" /* for TH */
 #include "state.h"
-#include "strings.h"
+#include "ui_strings.h"
 #include "ui.h"
 #include "util.h"
 

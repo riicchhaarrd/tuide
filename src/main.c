@@ -19,7 +19,7 @@
 #include "term.h"
 #include "ui.h"
 #include "util.h"
-#include "strings.h"
+#include "ui_strings.h"
 #include "config.h"
 
 static volatile int resize_pending = 0;

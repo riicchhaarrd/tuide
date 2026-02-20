@@ -6,11 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "state.h"
-#include "strings.h"
+#include "ui_strings.h"
 
 /* Global configuration instance */
 Config g_config = {0};

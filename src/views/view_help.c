@@ -3,7 +3,7 @@
 
 #include "../render.h"
 #include "../state.h"
-#include "../strings.h"
+#include "../ui_strings.h"
 #include "../util.h"
 #include "../views.h"
 

@@ -5,7 +5,7 @@
 #include "../editor.h"
 #include "../render.h"
 #include "../state.h"
-#include "../strings.h"
+#include "../ui_strings.h"
 #include "../syntax.h"
 #include "../util.h"
 #include "../views.h"
