@@ -25,6 +25,7 @@ void draw_prompt_overlay(void);
 void draw_sidebar(void);
 void draw_dividers(void);
 void draw_menu(void);
+void draw_dialog(void);
 
 /* Menu */
 void menu_reset(int x, int y);
@@ -33,6 +34,10 @@ void menu_add_item(const char *label, void (*action)(void));
 /* Prompt */
 void prompt_start(const char *label, void (*cb)(const char *), bool obs);
 void handle_prompt_key(Key k);
+
+/* Dialog */
+void dialog_show(const char *message, void (*yes_cb)(void), void (*no_cb)(void));
+void handle_dialog_key(Key k);
 
 /* CLI */
 void handle_cli_key(Key k);

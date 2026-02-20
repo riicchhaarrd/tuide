@@ -119,6 +119,7 @@ void draw(void) {
 	draw_prompt_overlay();
 	draw_dividers();
 	draw_menu();
+	draw_dialog();
 
 	g_app_state.needs_sync = false;
 	draw_flush();
@@ -486,6 +487,78 @@ void menu_add_item(const char *label, void (*action)(void)) {
 	g_app_state.menu_h++;
 	int l = (int)strlen(label) + 4;
 	if (l > g_app_state.menu_w) g_app_state.menu_w = l;
+}
+
+void dialog_show(const char *message, void (*yes_cb)(void), void (*no_cb)(void)) {
+	g_app_state.in_dialog = true;
+	snprintf(g_app_state.dialog_message, sizeof(g_app_state.dialog_message), "%s", message);
+	g_app_state.dialog_yes_cb = yes_cb;
+	g_app_state.dialog_no_cb = no_cb;
+}
+
+void draw_dialog(void) {
+	if (!g_app_state.in_dialog) return;
+	int w = 50;
+	int h = 6;
+	int x = (g_app_state.cols - w) / 2;
+	int y = (g_app_state.rows - h) / 2;
+	if (x < 1) x = 1;
+	if (y < 1) y = 1;
+
+	box_top(y, x, w, UI->dialog_title, true, NULL);
+	box_sides(y, x, w, h, true);
+	box_fill(y, x, w, h, TH->bg_panel);
+	box_bot(y + h - 1, x, w, true);
+
+	/* Message */
+	at(y + 2, x + 1);
+	cfg(TH->fg_normal);
+	int msg_len = (int)strlen(g_app_state.dialog_message);
+	int max_msg_w = w - 4;
+	if (msg_len > max_msg_w) msg_len = max_msg_w;
+	ppad(g_app_state.dialog_message, msg_len);
+
+	/* Yes button */
+	int yes_x = x + w / 2 - 12;
+	int no_x = x + w / 2 + 2;
+
+	at(y + 4, yes_x);
+	cbg(TH->bg_sel);
+	cfg(TH->fg_sel);
+	g_app_state.cur_bold = true;
+	ppad("[Y] Yes ", 8);
+	rst();
+
+	at(y + 4, no_x);
+	cbg(TH->bg_panel);
+	cfg(TH->fg_dim);
+	ppad("[N] No ", 7);
+	rst();
+}
+
+void handle_dialog_key(Key k) {
+	switch (k.type) {
+		case KEY_CHAR:
+			if (k.ch == 'y' || k.ch == 'Y') {
+				g_app_state.in_dialog = false;
+				if (g_app_state.dialog_yes_cb) g_app_state.dialog_yes_cb();
+			} else if (k.ch == 'n' || k.ch == 'N') {
+				g_app_state.in_dialog = false;
+				if (g_app_state.dialog_no_cb) g_app_state.dialog_no_cb();
+			}
+			break;
+		case KEY_ENTER:
+			g_app_state.in_dialog = false;
+			if (g_app_state.dialog_yes_cb) g_app_state.dialog_yes_cb();
+			break;
+		case KEY_ESC:
+		case KEY_BACKSPACE:
+			g_app_state.in_dialog = false;
+			if (g_app_state.dialog_no_cb) g_app_state.dialog_no_cb();
+			break;
+		default:
+			break;
+	}
 }
 
 void draw_menu(void) {

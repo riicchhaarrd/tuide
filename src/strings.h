@@ -56,6 +56,7 @@ typedef struct {
 	const char *menu_cancel;
 	const char *menu_stage;
 	const char *menu_unstage;
+	const char *dialog_title;
 
 	const char *prompt_find;
 	const char *prompt_go_to_line;

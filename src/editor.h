@@ -1,6 +1,7 @@
 #ifndef EDITOR_H
 #define EDITOR_H
 
+#include <stdbool.h>
 #include "state.h"
 #include "term.h"
 
@@ -12,6 +13,9 @@ void editor_prev_tab(void);
 int editor_visible_tab_count(void);
 bool editor_current_tab_is_diff(void);
 void editor_select_visible_tab(int idx);
+
+bool editor_has_unsaved_changes(void);
+void editor_confirm_quit(void);
 
 void handle_editor_key(Key k);
 

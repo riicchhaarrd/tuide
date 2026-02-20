@@ -212,14 +212,7 @@ void editor_prev_tab(void) {
 	if (slots <= 1) return;
 	editor_select_visible_tab((editor_current_slot() + slots - 1) % slots);
 }
-void editor_close_tab(void) {
-	if (g_app_state.editor_diff_tab) {
-		if (g_app_state.tab_count > 0)
-			editor_select_visible_tab(g_app_state.tab_current + 1);
-		else
-			g_app_state.focus = FOCUS_DIFF;
-		return;
-	}
+static void do_close_tab(void) {
 	if (g_app_state.tab_count == 0) return;
 	editor_free(&g_app_state.tabs[g_app_state.tab_current].ed);
 	for (int i = g_app_state.tab_current; i < g_app_state.tab_count - 1; i++)
@@ -233,6 +226,29 @@ void editor_close_tab(void) {
 	} else {
 		g_app_state.tabs[g_app_state.tab_current].ed.needs_sync = true;
 		g_app_state.focus = FOCUS_EDITOR;
+	}
+}
+
+void editor_close_tab(void) {
+	if (g_app_state.editor_diff_tab) {
+		if (g_app_state.tab_count > 0)
+			editor_select_visible_tab(g_app_state.tab_current + 1);
+		else
+			g_app_state.focus = FOCUS_DIFF;
+		return;
+	}
+	if (g_app_state.tab_count == 0) return;
+
+	/* Check for unsaved changes */
+	if (g_app_state.tabs[g_app_state.tab_current].ed.modified) {
+		char msg[300];
+		const char *filename = g_app_state.tabs[g_app_state.tab_current].ed.filename;
+		const char *basename = strrchr(filename, '/');
+		basename = basename ? basename + 1 : filename;
+		snprintf(msg, sizeof(msg), "Close '%s' with unsaved changes?", basename);
+		dialog_show(msg, do_close_tab, NULL);
+	} else {
+		do_close_tab();
 	}
 }
 
@@ -259,6 +275,19 @@ static void editor_ensure_line(void) {
 		}
 		CUR_ED.lines[CUR_ED.line_count++] = strdup("");
 	}
+}
+
+/* Check if any tab has unsaved changes */
+bool editor_has_unsaved_changes(void) {
+	for (int i = 0; i < g_app_state.tab_count; i++) {
+		if (g_app_state.tabs[i].ed.modified) return true;
+	}
+	return false;
+}
+
+/* Callback for quitting after confirmation */
+void editor_confirm_quit(void) {
+	g_app_state.running = false;
 }
 
 static void editor_insert_char(char char_to_insert) {
@@ -725,7 +754,11 @@ void handle_editor_key(Key key_event) {
 			editor_redo(&g_app_state.tabs[g_app_state.tab_current].ed);
 			break;
 		case KEY_CTRL_Q:
-			g_app_state.running = false;
+			if (editor_has_unsaved_changes()) {
+				dialog_show("Quit with unsaved changes?", editor_confirm_quit, NULL);
+			} else {
+				g_app_state.running = false;
+			}
 			break;
 		case KEY_CTRL_W:
 			editor_close_tab();

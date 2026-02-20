@@ -237,6 +237,12 @@ typedef struct {
 	void (*menu_actions[12])(void);
 	int menu_item_count;
 	int last_mx, last_my;
+
+	/* Dialog */
+	bool in_dialog;
+	char dialog_message[256];
+	void (*dialog_yes_cb)(void);
+	void (*dialog_no_cb)(void);
 } AppState;
 
 extern AppState g_app_state;

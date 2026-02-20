@@ -1011,6 +1011,10 @@ void handle_key(Key k) {
 		g_app_state.menu_active = false;
 		return;
 	}
+	if (g_app_state.in_dialog) {
+		handle_dialog_key(k);
+		return;
+	}
 	if (g_app_state.in_prompt) {
 		handle_prompt_key(k);
 		return;
@@ -1200,7 +1204,12 @@ void handle_key(Key k) {
 					g_app_state.focus = FOCUS_CHANGES;
 					return;
 				}
-				g_app_state.running = false;
+				/* Check for unsaved changes before quitting */
+				if (editor_has_unsaved_changes()) {
+					dialog_show("Quit with unsaved changes?", editor_confirm_quit, NULL);
+				} else {
+					g_app_state.running = false;
+				}
 				return;
 			case 'R':
 				reload_all();

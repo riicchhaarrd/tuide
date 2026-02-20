@@ -117,6 +117,7 @@ const UiStrings UI_EN = {
 	.menu_cancel = "Cancel",
 	.menu_stage = "Stage",
 	.menu_unstage = "Unstage",
+	.dialog_title = "Confirm",
 
 	.prompt_find = "Find:",
 	.prompt_go_to_line = "Go to line:",
