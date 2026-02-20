@@ -3,13 +3,14 @@
 
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
 void draw_stash(int top, int h) {
 	int w = g_app_state.cols;
 	char title[64];
-	snprintf(title, sizeof(title), "Stash (%d)", g_app_state.stash_count);
+	snprintf(title, sizeof(title), UI->title_stash_fmt, g_app_state.stash_count);
 	box_top(top, 1, w, title, true, NULL);
 	box_sides(top, 1, w, h, true);
 	box_fill(top, 1, w, h, TH->bg_panel);
@@ -18,7 +19,7 @@ void draw_stash(int top, int h) {
 	if (!g_app_state.stash_count) {
 		at(row + 2, g_app_state.cols / 2 - 14);
 		cfg(TH->fg_dim);
-		ppad("No stashes. Press 's' to stash changes.", 38);
+		ppad(UI->stash_empty_msg, 38);
 		rst();
 		return;
 	}

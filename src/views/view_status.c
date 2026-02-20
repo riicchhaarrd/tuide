@@ -4,20 +4,21 @@
 #include "../git.h"
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
 static void draw_commit_bar(int row, int w, int sx) {
 	bool focused = g_app_state.commit_bar_focused;
 	int iw = w - 2;
-	const char *commit_label = " \xe2\x9c\x93 Commit";
-	const char *amend_label = " \xe2\x86\xba Amend";
+	const char *commit_label = UI->commit_button_label;
+	const char *amend_label = UI->amend_button_label;
 
 	at(row, sx + 1);
 	cbg(TH->bg_header);
 	cfg(TH->fg_staged);
 	g_app_state.cur_bold = true;
-	ppad(" \xe2\x9c\x8d ", 3);
+	ppad(UI->commit_bar_icon, 3);
 	rst();
 
 	int btn_total_w = COMMIT_BTN_W + AMEND_BTN_W;
@@ -65,7 +66,7 @@ static void draw_commit_bar(int row, int w, int sx) {
 		cbg(TH->bg_panel);
 		cfg(TH->fg_dim);
 		g_app_state.cur_italic = true;
-		ppad("commit message...", field_w);
+		ppad(UI->commit_placeholder, field_w);
 		g_app_state.cur_italic = false;
 		rst();
 	}
@@ -90,7 +91,7 @@ void draw_changes(int top, int h) {
 	int w = g_app_state.layout_width;
 	int sx = g_app_state.sidebar_w + 1;
 	bool act = (g_app_state.focus == FOCUS_CHANGES && g_app_state.current_view == VIEW_STATUS);
-	box_top(top, sx, w, "Changes", act, NULL);
+	box_top(top, sx, w, UI->title_changes, act, NULL);
 	box_sides(top, sx, w, h, act);
 	box_fill(top, sx, w, h, TH->bg_panel);
 
@@ -128,7 +129,7 @@ void draw_changes(int top, int h) {
 
 	if (staged_n > 0) {
 		items[item_count].is_header = true;
-		snprintf(items[item_count].label, 64, " ✓ Staged (%d) ", staged_n);
+		snprintf(items[item_count].label, 64, UI->header_staged_fmt, staged_n);
 		items[item_count].file_idx = -1;
 		item_count++;
 		for (int i = 0; i < g_app_state.file_count; i++) {
@@ -147,7 +148,7 @@ void draw_changes(int top, int h) {
 			item_count++;
 		}
 		items[item_count].is_header = true;
-		snprintf(items[item_count].label, 64, " ✗ Unstaged (%d) ", unstaged_n);
+		snprintf(items[item_count].label, 64, UI->header_unstaged_fmt, unstaged_n);
 		items[item_count].file_idx = -1;
 		item_count++;
 		for (int i = 0; i < g_app_state.file_count; i++) {
@@ -271,7 +272,7 @@ void draw_graph(int top, int h) {
 	int w = g_app_state.layout_width;
 	int sx = g_app_state.sidebar_w + 1;
 	bool act = (g_app_state.focus == FOCUS_GRAPH && g_app_state.current_view == VIEW_STATUS);
-	box_top(top, sx, w, "Graph", act, NULL);
+	box_top(top, sx, w, UI->title_graph, act, NULL);
 	box_sides(top, sx, w, h, act);
 	box_fill(top, sx, w, h, TH->bg_base);
 

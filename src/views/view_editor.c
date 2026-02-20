@@ -5,6 +5,7 @@
 #include "../editor.h"
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
@@ -30,7 +31,7 @@ void draw_browser(int top, int h) {
 	int w = g_app_state.layout_width;
 	int sx = g_app_state.sidebar_w + 1;
 	bool act = (g_app_state.focus == FOCUS_BROWSER);
-	box_top(top, sx, w, "Files", act, NULL);
+	box_top(top, sx, w, UI->title_files, act, NULL);
 	box_sides(top, sx, w, h, act);
 	box_fill(top, sx, w, h, TH->bg_panel);
 	int row = top + 1, lim = top + h - 1, vis = lim - row;
@@ -72,12 +73,13 @@ void draw_browser(int top, int h) {
 
 void draw_editor(int top, int render_x, int render_width, int h) {
 	if (g_app_state.tab_count == 0) {
-		box_top(top, render_x, render_width, "Editor", (g_app_state.focus == FOCUS_EDITOR), NULL);
+		box_top(top, render_x, render_width, UI->title_editor,
+				(g_app_state.focus == FOCUS_EDITOR), NULL);
 		box_sides(top, render_x, render_width, h, (g_app_state.focus == FOCUS_EDITOR));
 		box_fill(top, render_x, render_width, h, TH->bg_base);
 		at(top + h / 2, render_x + render_width / 2 - 10);
 		cfg(TH->fg_dim);
-		ppad("(no files open)", 15);
+		ppad(UI->editor_no_files, 15);
 		box_bot(top + h - 1, render_x, render_width, (g_app_state.focus == FOCUS_EDITOR));
 		return;
 	}
@@ -87,7 +89,7 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 
 	char title[512];
 	snprintf(title, sizeof(title), " %s ", t->path);
-	box_top(top, render_x, render_width, "Editor", act, " [Save] ");
+	box_top(top, render_x, render_width, UI->title_editor, act, UI->title_editor_save);
 	box_sides(top, render_x, render_width, h, act);
 	box_fill(top, render_x, render_width, h, TH->bg_base);
 
@@ -315,7 +317,8 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 	} else
 		cfg(TH->fg_dim);
 	char sbuf[256];
-	snprintf(sbuf, sizeof(sbuf), " Ln %d, Col %d  ", ed->cursor_row + 1, ed->cursor_col + 1);
+	snprintf(sbuf, sizeof(sbuf), UI->editor_status_position_fmt, ed->cursor_row + 1,
+			 ed->cursor_col + 1);
 	ppad(sbuf, (int)strlen(sbuf));
 	at(top + h - 2, render_x + render_width - 20);
 	if (!act)
@@ -325,7 +328,7 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 		cbg(TH->bg_panel);
 		g_app_state.cur_bold = false;
 	}
-	snprintf(sbuf, sizeof(sbuf), " [UTF-8]  %s ", get_lang_name(t->path));
+	snprintf(sbuf, sizeof(sbuf), UI->editor_status_encoding_lang_fmt, get_lang_name(t->path));
 	ppad(sbuf, (int)strlen(sbuf));
 	rst();
 

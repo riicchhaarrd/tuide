@@ -12,6 +12,7 @@
 
 #include "render.h" /* for TH */
 #include "state.h"
+#include "strings.h"
 #include "ui.h"
 #include "util.h"
 
@@ -97,7 +98,7 @@ static void editor_push_undo(Editor *ed) {
 
 void editor_undo(Editor *ed) {
 	if (ed->undo_top == 0) {
-		OK("Nothing to undo");
+		OK("%s", UI->msg_nothing_to_undo);
 		return;
 	}
 	ed->needs_sync = true;
@@ -108,12 +109,12 @@ void editor_undo(Editor *ed) {
 	editor_restore_snapshot(ed, e.text, e.cursor_row, e.cursor_col);
 	free(e.text);
 	if (editor_content_hash(ed) == ed->saved_hash) ed->modified = false;
-	OK("Undo");
+	OK("%s", UI->msg_undo);
 }
 
 void editor_redo(Editor *ed) {
 	if (ed->redo_top == 0) {
-		OK("Nothing to redo");
+		OK("%s", UI->msg_nothing_to_redo);
 		return;
 	}
 	ed->needs_sync = true;
@@ -124,7 +125,7 @@ void editor_redo(Editor *ed) {
 	editor_restore_snapshot(ed, e.text, e.cursor_row, e.cursor_col);
 	free(e.text);
 	if (editor_content_hash(ed) == ed->saved_hash) ed->modified = false;
-	OK("Redo");
+	OK("%s", UI->msg_redo);
 }
 
 void editor_load(const char *path) {
@@ -204,7 +205,7 @@ void editor_save(void) {
 	fclose(fp);
 	t->ed.modified = false;
 	t->ed.saved_hash = editor_content_hash(&t->ed);
-	OK("Saved %s", t->path);
+	OK(UI->msg_saved_fmt, t->path);
 }
 
 static void editor_ensure_line(void) {
@@ -316,9 +317,9 @@ void editor_goto_line(const char *line_str) {
 		CUR_ED.cursor_row = line_num - 1;
 		CUR_ED.cursor_col = 0;
 		CUR_ED.needs_sync = true;
-		OK("Jumped to line %d", line_num);
+		OK(UI->msg_jumped_to_line_fmt, line_num);
 	} else
-		ERR("Invalid line number");
+		ERR("%s", UI->err_invalid_line_number);
 }
 
 void editor_find(const char *pattern) {
@@ -332,7 +333,7 @@ void editor_find(const char *pattern) {
 		if (found_pos) {
 			CUR_ED.cursor_row = i;
 			CUR_ED.cursor_col = (int)(found_pos - line);
-			OK("Found: %s (n/N for next/prev)", pattern);
+			OK(UI->msg_found_fmt, pattern);
 			return;
 		}
 	}
@@ -342,16 +343,16 @@ void editor_find(const char *pattern) {
 		if (found_pos) {
 			CUR_ED.cursor_row = i;
 			CUR_ED.cursor_col = (int)(found_pos - line);
-			OK("Found (wrapped): %s", pattern);
+			OK(UI->msg_found_wrapped_fmt, pattern);
 			return;
 		}
 	}
-	ERR("Not found: %s", pattern);
+	ERR(UI->err_not_found_fmt, pattern);
 }
 
 static void editor_find_next(void) {
 	if (!g_app_state.ed_search[0]) {
-		ERR("No search term (Ctrl+F to search)");
+		ERR("%s", UI->err_no_search_term);
 		return;
 	}
 	const char *pattern = g_app_state.ed_search;
@@ -361,7 +362,7 @@ static void editor_find_next(void) {
 		if (pos) {
 			CUR_ED.cursor_row = i;
 			CUR_ED.cursor_col = (int)(pos - line);
-			OK("Next: %s", pattern);
+			OK(UI->msg_next_fmt, pattern);
 			return;
 		}
 	}
@@ -372,16 +373,16 @@ static void editor_find_next(void) {
 		if (pos) {
 			CUR_ED.cursor_row = i;
 			CUR_ED.cursor_col = (int)(pos - line);
-			OK("Next (wrapped): %s", pattern);
+			OK(UI->msg_next_wrapped_fmt, pattern);
 			return;
 		}
 	}
-	ERR("Not found: %s", pattern);
+	ERR(UI->err_not_found_fmt, pattern);
 }
 
 static void editor_find_prev(void) {
 	if (!g_app_state.ed_search[0]) {
-		ERR("No search term (Ctrl+F to search)");
+		ERR("%s", UI->err_no_search_term);
 		return;
 	}
 	const char *pattern = g_app_state.ed_search;
@@ -399,7 +400,7 @@ static void editor_find_prev(void) {
 		if (found) {
 			CUR_ED.cursor_row = i;
 			CUR_ED.cursor_col = (int)(found - line);
-			OK("Prev: %s", pattern);
+			OK(UI->msg_prev_fmt, pattern);
 			return;
 		}
 	}
@@ -413,11 +414,11 @@ static void editor_find_prev(void) {
 		if (found) {
 			CUR_ED.cursor_row = i;
 			CUR_ED.cursor_col = (int)(found - line);
-			OK("Prev (wrapped): %s", pattern);
+			OK(UI->msg_prev_wrapped_fmt, pattern);
 			return;
 		}
 	}
-	ERR("Not found: %s", pattern);
+	ERR(UI->err_not_found_fmt, pattern);
 }
 
 void editor_paste(void) {
@@ -496,7 +497,7 @@ void action_copy_editor_selection(void) {
 	}
 	g_app_state.clipboard[len] = '\0';
 	copy_to_sys_clipboard(g_app_state.clipboard);
-	OK("Copied %d chars from editor to system clipboard", (int)len);
+	OK(UI->msg_copied_editor_fmt, (int)len);
 }
 
 void editor_delete_selection(void) {
@@ -771,15 +772,15 @@ Color get_token_color(const char *token, bool is_comment, const char *extension)
 
 const char *get_lang_name(const char *path) {
 	const char *ext = strrchr(path, '.');
-	if (!ext) return "Plain Text";
-	if (strcmp(ext, ".c") == 0) return "C";
-	if (strcmp(ext, ".h") == 0) return "C Header";
-	if (strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0) return "C++";
-	if (strcmp(ext, ".py") == 0) return "Python";
-	if (strcmp(ext, ".js") == 0) return "JavaScript";
-	if (strcmp(ext, ".ts") == 0) return "TypeScript";
-	if (strcmp(ext, ".md") == 0) return "Markdown";
-	return "Plain Text";
+	if (!ext) return UI->lang_plain_text;
+	if (strcmp(ext, ".c") == 0) return UI->lang_c;
+	if (strcmp(ext, ".h") == 0) return UI->lang_c_header;
+	if (strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0) return UI->lang_cpp;
+	if (strcmp(ext, ".py") == 0) return UI->lang_python;
+	if (strcmp(ext, ".js") == 0) return UI->lang_javascript;
+	if (strcmp(ext, ".ts") == 0) return UI->lang_typescript;
+	if (strcmp(ext, ".md") == 0) return UI->lang_markdown;
+	return UI->lang_plain_text;
 }
 
 static void action_new_file(const char *name) {
@@ -790,9 +791,9 @@ static void action_new_file(const char *name) {
 	if (fp) {
 		fclose(fp);
 		load_browser(g_app_state.browser_path);
-		OK("Created %s", name);
+		OK(UI->msg_created_file_fmt, name);
 	} else
-		ERR("Failed to create %s", name);
+		ERR(UI->err_failed_create_file_fmt, name);
 }
 
 static void action_delete_file(void) {
@@ -803,12 +804,12 @@ static void action_delete_file(void) {
 	snprintf(full, sizeof(full), "%s/%s", g_app_state.browser_path, f->path);
 	if (remove(full) == 0) {
 		load_browser(g_app_state.browser_path);
-		OK("Deleted %s", f->path);
+		OK(UI->msg_deleted_file_fmt, f->path);
 	} else
-		ERR("Failed to delete %s", f->path);
+		ERR(UI->err_failed_delete_file_fmt, f->path);
 }
 
-void menu_new_file(void) { prompt_start("New file name:", action_new_file, false); }
+void menu_new_file(void) { prompt_start(UI->prompt_new_file, action_new_file, false); }
 void menu_delete_file(void) { action_delete_file(); }
 
 void load_browser(const char *path) {

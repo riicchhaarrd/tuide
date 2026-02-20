@@ -12,6 +12,7 @@
 #include "git.h"
 #include "render.h" /* for draw_flush in action_push/pull if needed, but actions are in git.c */
 #include "state.h"
+#include "strings.h"
 #include "ui.h"
 #include "util.h"
 #include "views.h"
@@ -70,20 +71,20 @@ static void action_open_in_editor_extern(const char *path) {
 	get_winsize();
 	invalidate_front_buffer(); /* force full redraw after external editor */
 	reload_all();
-	OK("Returned from %s", ed);
+	OK(UI->msg_returned_from_fmt, ed);
 }
 
 /* Commit bar actions */
 static void do_commit_bar(void) {
 	if (!g_app_state.commit_msg_buf[0]) {
-		ERR("Empty commit message");
+		ERR("%s", UI->err_empty_commit_message);
 		return;
 	}
 	int s = 0;
 	for (int i = 0; i < g_app_state.file_count; i++)
 		if (g_app_state.files[i].staged) s++;
 	if (!s) {
-		ERR("Nothing staged");
+		ERR("%s", UI->err_nothing_staged);
 		return;
 	}
 	/* We need to expose do_commit from git.c or use action_commit logic but taking msg.
@@ -103,11 +104,11 @@ static void do_commit_bar(void) {
 		int r = git_exec("git commit -F '%s'", tmp);
 		unlink(tmp);
 		if (r == 0) {
-			OK("Committed: %.60s", g_app_state.commit_msg_buf);
+			OK(UI->msg_committed_fmt, g_app_state.commit_msg_buf);
 			load_status();
 			load_log();
 		} else
-			ERR("Commit failed");
+			ERR("%s", UI->err_commit_failed);
 	}
 
 	g_app_state.commit_msg_buf[0] = '\0';
@@ -127,18 +128,18 @@ static void do_amend_bar(void) {
 			int r = git_exec("git commit --amend -F '%s'", tmp);
 			unlink(tmp);
 			if (r == 0) {
-				OK("Amended");
+				OK("%s", UI->msg_amended);
 				load_log();
 			} else
-				ERR("Amend failed");
+				ERR("%s", UI->err_amend_failed);
 		}
 	} else {
 		int r = git_exec("git commit --amend --no-edit");
 		if (r == 0) {
-			OK("Amended");
+			OK("%s", UI->msg_amended);
 			load_log();
 		} else
-			ERR("Amend failed");
+			ERR("%s", UI->err_amend_failed);
 	}
 	g_app_state.commit_msg_buf[0] = '\0';
 	g_app_state.commit_msg_cursor = 0;
@@ -157,14 +158,16 @@ static void open_diff_summary_at(int idx) {
 	DiffLine *dl = &g_app_state.diff_lines[idx];
 	if (dl->type != 5) return;
 
-	if (strncmp(g_app_state.diff_title, "Files:", 6) == 0) {
+	if (strncmp(g_app_state.diff_title, UI->diff_title_files_prefix,
+				strlen(UI->diff_title_files_prefix)) == 0) {
 		editor_load(dl->new_line);
 		g_app_state.editor_active = true;
 		g_app_state.focus = FOCUS_EDITOR;
 		return;
 	}
 
-	if (strncmp(g_app_state.diff_title, "Search:", 7) == 0) {
+	if (strncmp(g_app_state.diff_title, UI->diff_title_search_prefix,
+				strlen(UI->diff_title_search_prefix)) == 0) {
 		char lb[LINE_MAX_LEN];
 		snprintf(lb, sizeof(lb), "%s", dl->new_line);
 		char *c1 = strchr(lb, ':');
@@ -192,7 +195,7 @@ static void open_diff_summary_at(int idx) {
 	snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, g_app_state.diff_commit,
 			 fpath);
 	char *o = git_run(cmd);
-	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s",
+	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), UI->diff_title_commit_fmt,
 			 g_app_state.diff_commit, fpath);
 	g_app_state.diff_is_summary = false;
 	parse_diff(o ? o : "");
@@ -205,15 +208,16 @@ static void show_log_commit(void) {
 	GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
 	g_app_state.diff_staged = false;
 	g_app_state.diff_is_summary = false;
-	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s", c->hash,
-			 c->subject);
+	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), UI->diff_title_commit_fmt,
+			 c->hash, c->subject);
 	snprintf(g_app_state.diff_commit, sizeof(g_app_state.diff_commit), "%s", c->hash);
 	load_diff_commit(c->hash);
 }
 
 static bool diff_is_commit_view(void) {
 	if (g_app_state.diff_commit[0]) return true;
-	return strncmp(g_app_state.diff_title, "commit ", 7) == 0;
+	return strncmp(g_app_state.diff_title, UI->diff_title_commit_prefix,
+				   strlen(UI->diff_title_commit_prefix)) == 0;
 }
 
 static void refresh_diff_after_context_toggle(void) {
@@ -424,23 +428,23 @@ static void handle_mouse(MouseEvt m) {
 	if (right_cl) {
 		if (g_app_state.focus == FOCUS_EDITOR) {
 			menu_reset(m.col, m.row);
-			menu_add_item("Copy", action_copy_editor_selection);
-			menu_add_item("Cut", editor_cut_selection);
-			menu_add_item("Paste", editor_paste);
-			menu_add_item("Cancel", NULL);
+			menu_add_item(UI->menu_copy, action_copy_editor_selection);
+			menu_add_item(UI->menu_cut, editor_cut_selection);
+			menu_add_item(UI->menu_paste, editor_paste);
+			menu_add_item(UI->menu_cancel, NULL);
 			return;
 		}
 		menu_reset(m.col, m.row);
 		if (g_app_state.selecting) {
-			menu_add_item("Copy", action_copy_selection);
+			menu_add_item(UI->menu_copy, action_copy_selection);
 			if (!g_app_state.diff_is_summary && !g_app_state.diff_commit[0]) {
 				if (g_app_state.diff_staged)
-					menu_add_item("Unstage", action_unstage_selection);
+					menu_add_item(UI->menu_unstage, action_unstage_selection);
 				else
-					menu_add_item("Stage", action_stage_selection);
+					menu_add_item(UI->menu_stage, action_stage_selection);
 			}
 		}
-		menu_add_item("Cancel", NULL);
+		menu_add_item(UI->menu_cancel, NULL);
 		return;
 	}
 
@@ -478,9 +482,12 @@ static void handle_mouse(MouseEvt m) {
 	if (cl && m.row == toggle_row && m.col > toggle_min_x) {
 		if (!editor_visible) {
 			g_app_state.focus = FOCUS_DIFF;
-			const char *label_side = g_app_state.diff_sidebyside ? "Split" : "Unify";
-			const char *label_ctx = g_app_state.diff_continuous ? "Full" : "Hunk";
-			const char *label_wrap = g_app_state.diff_wrap ? "Wrap" : "NoWrap";
+			const char *label_side =
+				g_app_state.diff_sidebyside ? UI->diff_side_split : UI->diff_side_unify;
+			const char *label_ctx =
+				g_app_state.diff_continuous ? UI->diff_ctx_full : UI->diff_ctx_hunk;
+			const char *label_wrap =
+				g_app_state.diff_wrap ? UI->diff_wrap_label_on : UI->diff_wrap_label_off;
 			char extra[64];
 			snprintf(extra, sizeof(extra), " [%s] [%s] [%s] ", label_side, label_ctx,
 					 label_wrap);
@@ -978,13 +985,14 @@ void handle_key(Key k) {
 
 	if (k.type == KEY_CTRL_F) {
 		if (g_app_state.focus == FOCUS_EDITOR)
-			prompt_start("Find:", editor_find, false);
+			prompt_start(UI->prompt_find, editor_find, false);
 		else
 			action_pull();
 		return;
 	}
 	if (k.type == KEY_CTRL_G) {
-		if (g_app_state.focus == FOCUS_EDITOR) prompt_start("Go to line:", editor_goto_line, false);
+		if (g_app_state.focus == FOCUS_EDITOR)
+			prompt_start(UI->prompt_go_to_line, editor_goto_line, false);
 		return;
 	}
 	if (k.type == KEY_CTRL_S) {
@@ -1167,13 +1175,14 @@ void handle_key(Key k) {
 				return;
 			case 'T':
 				g_app_state.theme_idx = (g_app_state.theme_idx + 1) % NTHEMES;
-				OK("Theme: %s", TH->name);
+				OK(UI->msg_theme_fmt, TH->name);
 				return;
 			case 'H':
 				g_app_state.diff_continuous = !g_app_state.diff_continuous;
 				refresh_diff_after_context_toggle();
-				OK("Continuous Diff: %s",
-				   g_app_state.diff_continuous ? "ON (full context)" : "OFF (hunks only)");
+				OK(UI->msg_continuous_diff_fmt,
+				   g_app_state.diff_continuous ? UI->diff_continuous_on
+											  : UI->diff_continuous_off);
 				return;
 			case 'V': {
 				const char *path = NULL;
@@ -1186,7 +1195,8 @@ void handle_key(Key k) {
 			}
 			case 'W':
 				g_app_state.diff_wrap = !g_app_state.diff_wrap;
-				OK("Diff wrap: %s", g_app_state.diff_wrap ? "ON" : "OFF");
+				OK(UI->msg_diff_wrap_fmt,
+				   g_app_state.diff_wrap ? UI->toggle_on : UI->toggle_off);
 				return;
 		}
 	}
@@ -1205,11 +1215,11 @@ void handle_key(Key k) {
 		return;
 	}
 	if (k.type == KEY_CTRL_P) {
-		prompt_start("Go to File:", action_find_file, false);
+		prompt_start(UI->prompt_go_to_file, action_find_file, false);
 		return;
 	}
 	if (k.type == KEY_CTRL_K) {
-		prompt_start("Global Search (grep):", action_grep, false);
+		prompt_start(UI->prompt_global_search, action_grep, false);
 		return;
 	}
 	if (k.type == KEY_CTRL_Q) {

@@ -10,6 +10,7 @@
 
 #include "render.h" /* For draw_flush if needed, though we use draw() from ui.h now */
 #include "state.h"
+#include "strings.h"
 #include "ui.h"
 #include "util.h"
 
@@ -59,7 +60,7 @@ void load_branch(void) {
 		snprintf(g_app_state.branch_name, sizeof(g_app_state.branch_name), "%s", o);
 		free(o);
 	} else {
-		snprintf(g_app_state.branch_name, sizeof(g_app_state.branch_name), "(unknown)");
+		snprintf(g_app_state.branch_name, sizeof(g_app_state.branch_name), "%s", UI->branch_unknown);
 	}
 }
 
@@ -504,7 +505,7 @@ void fetch_commit_files(int idx) {
 	if (idx < 0 || idx >= g_app_state.commit_count) return;
 	GitCommit *c = &g_app_state.commits[idx];
 	if (c->file_count > 0) return;
-	snprintf(c->files[0], 128, "[View Full Diff]");
+	snprintf(c->files[0], 128, "%s", UI->diff_view_full_label);
 	c->file_count = 1;
 	char cmd[256];
 	snprintf(cmd, sizeof(cmd), "git show --name-only --format='' %s 2>/dev/null | head -n 15",
@@ -532,8 +533,8 @@ void sync_graph_preview(void) {
 		return;
 	GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
 	if (g_app_state.graph_file_sel < 0 || g_app_state.graph_file_sel == 0) {
-		snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s", c->hash,
-				 c->subject);
+		snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), UI->diff_title_commit_fmt,
+				 c->hash, c->subject);
 		g_app_state.diff_is_summary = false;
 		snprintf(g_app_state.diff_commit, sizeof(g_app_state.diff_commit), "%s", c->hash);
 		load_diff_commit(c->hash);
@@ -545,8 +546,8 @@ void sync_graph_preview(void) {
 		char cmd[1024];
 		snprintf(cmd, sizeof(cmd), "git show %s %s -- '%s' 2>/dev/null", ctx_, c->hash, fpath);
 		char *o = git_run(cmd);
-		snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s", c->hash,
-				 fpath);
+		snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), UI->diff_title_commit_fmt,
+				 c->hash, fpath);
 		g_app_state.diff_is_summary = false;
 		snprintf(g_app_state.diff_commit, sizeof(g_app_state.diff_commit), "%s", c->hash);
 		parse_diff(o ? o : "");
@@ -561,7 +562,7 @@ void reload_all(void) {
 	load_branches();
 	load_stash();
 	update_diff();
-	OK("Refreshed");
+	OK("%s", UI->msg_refreshed);
 }
 
 bool in_git_repo(void) {
@@ -576,26 +577,26 @@ void action_stage(void) {
 	GitFile *f = &g_app_state.files[g_app_state.file_sel];
 	if (f->staged) {
 		git_exec("git reset HEAD -- '%s'", f->path);
-		OK("Unstaged: %s", f->path);
+		OK(UI->msg_unstaged_fmt, f->path);
 	} else {
 		if (f->status == FS_DELETED)
 			git_exec("git rm -- '%s'", f->path);
 		else
 			git_exec("git add -- '%s'", f->path);
-		OK("Staged: %s", f->path);
+		OK(UI->msg_staged_fmt, f->path);
 	}
 	load_status();
 	update_diff();
 }
 void action_stage_all(void) {
 	git_exec("git add -A");
-	OK("Staged all");
+	OK("%s", UI->msg_staged_all);
 	load_status();
 	update_diff();
 }
 void action_unstage_all(void) {
 	git_exec("git reset HEAD");
-	OK("Unstaged all");
+	OK("%s", UI->msg_unstaged_all);
 	load_status();
 	update_diff();
 }
@@ -730,36 +731,36 @@ static void format_patch_path(const char *prefix, const char *path, char *out, s
 
 static int apply_patch_selection(bool reverse) {
 	if (g_app_state.diff_is_summary || g_app_state.diff_commit[0]) {
-		ERR("Select a working tree diff");
+		ERR("%s", UI->err_select_working_tree_diff);
 		return -1;
 	}
 	if (!g_app_state.file_count || g_app_state.file_sel < 0 ||
 		g_app_state.file_sel >= g_app_state.file_count) {
-		ERR("No file selected");
+		ERR("%s", UI->err_no_file_selected);
 		return -1;
 	}
 	if (g_app_state.diff_count <= 0) {
-		ERR("No diff");
+		ERR("%s", UI->err_no_diff);
 		return -1;
 	}
 	if (reverse && !g_app_state.diff_staged) {
-		ERR("Viewing unstaged diff");
+		ERR("%s", UI->err_viewing_unstaged_diff);
 		return -1;
 	}
 	if (!reverse && g_app_state.diff_staged) {
-		ERR("Viewing staged diff");
+		ERR("%s", UI->err_viewing_staged_diff);
 		return -1;
 	}
 
 	HunkInfo *hunks = NULL;
 	int hunk_count = collect_hunks(&hunks);
 	if (hunk_count < 0) {
-		ERR("Failed to parse hunks");
+		ERR("%s", UI->err_parse_hunks);
 		return -1;
 	}
 	if (hunk_count == 0) {
 		free(hunks);
-		ERR("No hunks to stage");
+		ERR("%s", UI->err_no_hunks);
 		return -1;
 	}
 
@@ -814,7 +815,7 @@ static int apply_patch_selection(bool reverse) {
 	int fd = mkstemp(tmp);
 	if (fd < 0) {
 		free(hunks);
-		ERR("mkstemp failed");
+		ERR("%s", UI->err_mkstemp_failed);
 		return -1;
 	}
 	FILE *fp = fdopen(fd, "w");
@@ -822,7 +823,7 @@ static int apply_patch_selection(bool reverse) {
 		close(fd);
 		unlink(tmp);
 		free(hunks);
-		ERR("mkstemp failed");
+		ERR("%s", UI->err_mkstemp_failed);
 		return -1;
 	}
 
@@ -911,13 +912,13 @@ static int apply_patch_selection(bool reverse) {
 	if (oom) {
 		unlink(tmp);
 		free(hunks);
-		ERR("Out of memory");
+		ERR("%s", UI->err_out_of_memory);
 		return -1;
 	}
 	if (!wrote_header || total_sel == 0) {
 		unlink(tmp);
 		free(hunks);
-		ERR(has_sel ? "No changed lines selected" : "No hunk selected");
+		ERR("%s", has_sel ? UI->err_no_changed_lines_selected : UI->err_no_hunk_selected);
 		return -1;
 	}
 
@@ -925,13 +926,13 @@ static int apply_patch_selection(bool reverse) {
 	unlink(tmp);
 	free(hunks);
 	if (r == 0) {
-		OK(reverse ? "Unstaged selection" : "Staged selection");
+		OK("%s", reverse ? UI->msg_unstaged_selection : UI->msg_staged_selection);
 		load_status();
 		update_diff();
 		g_app_state.selecting = false;
 		return 0;
 	}
-	ERR(reverse ? "Unstage failed" : "Stage failed");
+	ERR("%s", reverse ? UI->err_unstage_failed : UI->err_stage_failed);
 	return -1;
 }
 
@@ -943,10 +944,10 @@ void action_discard(void) {
 	GitFile *f = &g_app_state.files[g_app_state.file_sel];
 	if (f->status == FS_UNTRACKED) {
 		git_exec("rm -f -- '%s'", f->path);
-		OK("Removed: %s", f->path);
+		OK(UI->msg_removed_fmt, f->path);
 	} else {
 		git_exec("git checkout -- '%s'", f->path);
-		OK("Discarded: %s", f->path);
+		OK(UI->msg_discarded_fmt, f->path);
 	}
 	load_status();
 	update_diff();
@@ -954,14 +955,14 @@ void action_discard(void) {
 
 static void do_commit(const char *msg) {
 	if (!msg || !msg[0]) {
-		ERR("Empty message");
+		ERR("%s", UI->err_empty_message);
 		return;
 	}
 	char tmp[64];
 	snprintf(tmp, sizeof(tmp), "/tmp/gitui_msg_XXXXXX");
 	int fd = mkstemp(tmp);
 	if (fd < 0) {
-		ERR("mkstemp failed");
+		ERR("%s", UI->err_mkstemp_failed);
 		return;
 	}
 	ssize_t w = write(fd, msg, strlen(msg));
@@ -970,21 +971,21 @@ static void do_commit(const char *msg) {
 	int r = git_exec("git commit -F '%s'", tmp);
 	unlink(tmp);
 	if (r == 0) {
-		OK("Committed: %.60s", msg);
+		OK(UI->msg_committed_fmt, msg);
 		load_status();
 		load_log();
 	} else
-		ERR("Commit failed");
+		ERR("%s", UI->err_commit_failed);
 }
 void action_commit(void) {
 	int s = 0;
 	for (int i = 0; i < g_app_state.file_count; i++)
 		if (g_app_state.files[i].staged) s++;
 	if (!s) {
-		ERR("Nothing staged");
+		ERR("%s", UI->err_nothing_staged);
 		return;
 	}
-	prompt_start("Commit message:", do_commit, false);
+	prompt_start(UI->prompt_commit_message, do_commit, false);
 }
 static void do_amend(const char *msg) {
 	int r;
@@ -995,7 +996,7 @@ static void do_amend(const char *msg) {
 		snprintf(tmp, sizeof(tmp), "/tmp/gitui_amend_XXXXXX");
 		int fd = mkstemp(tmp);
 		if (fd < 0) {
-			ERR("mkstemp");
+			ERR("%s", UI->err_mkstemp);
 			return;
 		}
 		ssize_t w = write(fd, msg, strlen(msg));
@@ -1005,30 +1006,30 @@ static void do_amend(const char *msg) {
 		unlink(tmp);
 	}
 	if (r == 0) {
-		OK("Amended");
+		OK("%s", UI->msg_amended);
 		load_log();
 	} else
-		ERR("Amend failed");
+		ERR("%s", UI->err_amend_failed);
 }
-void action_amend(void) { prompt_start("Amend message (empty=keep):", do_amend, false); }
+void action_amend(void) { prompt_start(UI->prompt_amend_message, do_amend, false); }
 void action_push(void) {
-	OK("Pushing...");
+	OK("%s", UI->msg_pushing);
 	draw();
 	int r = git_exec("git push");
 	if (r == 0)
-		OK("Pushed");
+		OK("%s", UI->msg_pushed);
 	else
-		ERR("Push failed");
+		ERR("%s", UI->err_push_failed);
 	load_log();
 }
 void action_pull(void) {
-	OK("Pulling...");
+	OK("%s", UI->msg_pulling);
 	draw();
 	int r = git_exec("git pull");
 	if (r == 0)
-		OK("Pulled");
+		OK("%s", UI->msg_pulled);
 	else
-		ERR("Pull failed");
+		ERR("%s", UI->err_pull_failed);
 	reload_all();
 }
 
@@ -1040,13 +1041,13 @@ static void do_stash(const char *msg) {
 		snprintf(cmd, sizeof(cmd), "git stash push");
 	int r = git_exec("%s", cmd);
 	if (r == 0) {
-		OK("Stashed");
+		OK("%s", UI->msg_stashed);
 		load_status();
 		load_stash();
 	} else
-		ERR("Stash failed");
+		ERR("%s", UI->err_stash_failed);
 }
-void action_stash(void) { prompt_start("Stash message (optional):", do_stash, false); }
+void action_stash(void) { prompt_start(UI->prompt_stash_message, do_stash, false); }
 
 void action_checkout(void) {
 	if (!g_app_state.branch_count) return;
@@ -1054,31 +1055,31 @@ void action_checkout(void) {
 	int r = b->is_remote ? git_exec("git checkout -t '%s'", b->name)
 						 : git_exec("git checkout '%s'", b->name);
 	if (r == 0) {
-		OK("Checked out: %s", b->name);
+		OK(UI->msg_checked_out_fmt, b->name);
 		load_branch();
 		reload_all();
 	} else
-		ERR("Checkout failed");
+		ERR("%s", UI->err_checkout_failed);
 }
 static void do_new_branch(const char *name) {
 	if (!name || !name[0]) {
-		ERR("Name required");
+		ERR("%s", UI->err_name_required);
 		return;
 	}
 	int r = git_exec("git checkout -b '%s'", name);
 	if (r == 0) {
-		OK("Created: %s", name);
+		OK(UI->msg_created_branch_fmt, name);
 		load_branch();
 		load_branches();
 	} else
-		ERR("Branch failed");
+		ERR("%s", UI->err_branch_failed);
 }
-void action_new_branch(void) { prompt_start("New branch name:", do_new_branch, false); }
+void action_new_branch(void) { prompt_start(UI->prompt_new_branch, do_new_branch, false); }
 void action_delete_branch(void) {
 	if (!g_app_state.branch_count) return;
 	GitBranch *b = &g_app_state.branches[g_app_state.branch_sel];
 	if (b->is_current) {
-		ERR("Cannot delete current branch");
+		ERR("%s", UI->err_cannot_delete_current_branch);
 		return;
 	}
 	int r;
@@ -1095,39 +1096,39 @@ void action_delete_branch(void) {
 	} else
 		r = git_exec("git branch -D '%s'", b->name);
 	if (r == 0) {
-		OK("Deleted: %s", b->name);
+		OK(UI->msg_deleted_branch_fmt, b->name);
 		load_branches();
 	} else
-		ERR("Delete failed");
+		ERR("%s", UI->err_delete_failed);
 }
 void action_apply_stash(void) {
 	if (!g_app_state.stash_count) return;
 	int r =
 		git_exec("git stash apply stash@{%d}", g_app_state.stashes[g_app_state.stash_sel].index);
 	if (r == 0) {
-		OK("Applied stash@{%d}", g_app_state.stashes[g_app_state.stash_sel].index);
+		OK(UI->msg_applied_stash_fmt, g_app_state.stashes[g_app_state.stash_sel].index);
 		load_status();
 	} else
-		ERR("Apply failed");
+		ERR("%s", UI->err_apply_failed);
 }
 void action_pop_stash(void) {
 	if (!g_app_state.stash_count) return;
 	int r = git_exec("git stash pop stash@{%d}", g_app_state.stashes[g_app_state.stash_sel].index);
 	if (r == 0) {
-		OK("Popped stash@{%d}", g_app_state.stashes[g_app_state.stash_sel].index);
+		OK(UI->msg_popped_stash_fmt, g_app_state.stashes[g_app_state.stash_sel].index);
 		load_status();
 		load_stash();
 	} else
-		ERR("Pop failed");
+		ERR("%s", UI->err_pop_failed);
 }
 void action_drop_stash(void) {
 	if (!g_app_state.stash_count) return;
 	int r = git_exec("git stash drop stash@{%d}", g_app_state.stashes[g_app_state.stash_sel].index);
 	if (r == 0) {
-		OK("Dropped stash@{%d}", g_app_state.stashes[g_app_state.stash_sel].index);
+		OK(UI->msg_dropped_stash_fmt, g_app_state.stashes[g_app_state.stash_sel].index);
 		load_stash();
 	} else
-		ERR("Drop failed");
+		ERR("%s", UI->err_drop_failed);
 }
 
 void action_copy_selection(void) {
@@ -1214,7 +1215,7 @@ void action_copy_selection(void) {
 	}
 	g_app_state.clipboard[len] = '\0';
 	copy_to_sys_clipboard(g_app_state.clipboard);
-	OK("Copied %d chars to system clipboard", (int)len);
+	OK(UI->msg_copied_clipboard_fmt, (int)len);
 }
 
 void action_find_file(const char *name) {
@@ -1224,7 +1225,7 @@ void action_find_file(const char *name) {
 			 name);
 	char *o = git_run(cmd);
 	if (!o || !o[0]) {
-		ERR("No files matching %s", name);
+		ERR(UI->err_no_files_matching_fmt, name);
 		free(o);
 		return;
 	}
@@ -1233,7 +1234,7 @@ void action_find_file(const char *name) {
 	g_app_state.diff_scroll = 0;
 	g_app_state.diff_sel = 0;
 	g_app_state.diff_is_summary = true;
-	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "Files: %s", name);
+	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), UI->diff_title_files_fmt, name);
 	g_app_state.diff_commit[0] = '\0';
 
 	char *line = o;
@@ -1260,7 +1261,7 @@ void action_grep(const char *pattern) {
 			 pattern);
 	char *o = git_run(cmd);
 	if (!o || !o[0]) {
-		ERR("No matches for %s", pattern);
+		ERR(UI->err_no_matches_fmt, pattern);
 		free(o);
 		return;
 	}
@@ -1269,7 +1270,8 @@ void action_grep(const char *pattern) {
 	g_app_state.diff_scroll = 0;
 	g_app_state.diff_sel = 0;
 	g_app_state.diff_is_summary = true;
-	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "Search: %s", pattern);
+	snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), UI->diff_title_search_fmt,
+			 pattern);
 	g_app_state.diff_commit[0] = '\0';
 
 	char *line = o;

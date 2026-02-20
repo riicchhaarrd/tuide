@@ -3,91 +3,37 @@
 
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
 void draw_help(int top, int h) {
 	int w = g_app_state.cols;
-	box_top(top, 1, w, "Help & Keybindings", true, NULL);
+	box_top(top, 1, w, UI->title_help, true, NULL);
 	box_sides(top, 1, w, h, true);
 	box_fill(top, 1, w, h, TH->bg_panel);
 	box_bot(top + h - 1, 1, w, true);
 
-	static const char *E[][2] = {{"NAVIGATION", ""},
-								 {"  Tab / Shift+Tab", "Cycle through all VISIBLE panes"},
-								 {"  1-4 / ?", "Jump to specific Git view"},
-								 {"  ↑/↓", "Move selection"},
-								 {"  ←/→", "Switch focus (or Browser back/enter)"},
-								 {"  Home / End", "Top / bottom"},
-								 {"  PgUp/PgDn", "Page scroll"},
-								 {"", ""},
-								 {"CHANGES PANE", ""},
-								 {"  e", "Open selected file in Editor"},
-								 {"  Space / Ctrl+S", "Stage / unstage selected file"},
-								 {"  a / u", "Stage all / Unstage all"},
-								 {"  d", "Discard changes"},
-								 {"  Enter / =", "Toggle Diff pane"},
-								 {"", ""},
-								 {"EDITOR", ""},
-								 {"  e", "Toggle Editor visibility (right pane)"},
-								 {"  Arrows", "Move cursor"},
-								 {"  Enter", "Insert newline"},
-								 {"  BS", "Delete character"},
-								 {"  Ctrl+Z", "Undo"},
-								 {"  Ctrl+Y", "Redo"},
-								 {"  Ctrl+S", "Save file"},
-								 {"  Ctrl+X", "Cut selection"},
-								 {"  Ctrl+C / y", "Copy selection"},
-								 {"  Ctrl+V", "Paste from clipboard"},
-								 {"  Shift+Arrows", "Extend text selection"},
-								 {"", ""},
-								 {"FILE BROWSER", ""},
-								 {"  b", "Toggle Browser visibility (left pane)"},
-								 {"  ↑/↓", "Move selection"},
-								 {"  Enter / →", "Open file in Editor / Enter directory"},
-								 {"  ←", "Go back to parent directory"},
-								 {"", ""},
-								 {"DIFF SELECTION", ""},
-								 {"  Mouse Drag", "Select lines in diff view"},
-								 {"  Space / S", "Stage selected lines or hunk"},
-								 {"  U", "Unstage selected lines or hunk"},
-								 {"  y / Ctrl+C", "Copy selection to clipboard"},
-								 {"", ""},
-								 {"GLOBAL", ""},
-								 {"  c / Ctrl+C", "Commit staged changes"},
-								 {"  A", "Amend last commit"},
-								 {"  P / Ctrl+P", "Push to remote"},
-								 {"  f / Ctrl+F", "Fetch + pull"},
-								 {"  s", "Stash working changes"},
-								 {"  V", "Open in $VISUAL/$EDITOR"},
-								 {"  R / Ctrl+R / Ctrl+L", "Full refresh"},
-								 {"  T", "Cycle theme"},
-								 {"  ?", "Toggle this help"},
-								 {"  q / Esc / Ctrl+Q", "Go back / quit"},
-								 {"", ""},
-								 {"MOUSE", ""},
-								 {"  Click", "Focus pane, select item"},
-								 {"  Scroll wheel", "Scroll pane under cursor"},
-								 {NULL, NULL}};
+	const UiHelpEntry *E = UI->help_entries;
 	int row = top + 1, lim = top + h - 1;
 	int split = g_app_state.cols / 2;
-	for (int i = 0; E[i][0] && row < lim; i++, row++) {
+	for (int i = 0; E[i].left && row < lim; i++, row++) {
 		at(row, 2);
 		cbg(TH->bg_panel);
-		if (E[i][1][0] == '\0' && strlen(E[i][0]) > 1) {
+		if (E[i].right[0] == '\0' && strlen(E[i].left) > 1) {
 			cfg(TH->fg_accent1);
 			g_app_state.cur_bold = true;
-			ppad(E[i][0], split - 3);
-		} else if (!E[i][0][0]) {
+			ppad(E[i].left, split - 3);
+		} else if (!E[i].left[0]) {
 			for (int k = 0; k < g_app_state.cols - 3; k++) put_cell(row, 2 + k, " ");
 		} else {
 			cfg(TH->fg_accent2);
 			g_app_state.cur_bold = true;
-			ppad(E[i][0], split - 3);
+			ppad(E[i].left, split - 3);
 			at(row, split);
 			cbg(TH->bg_panel);
 			cfg(TH->fg_normal);
-			ppad(E[i][1], g_app_state.cols - split - 2);
+			ppad(E[i].right, g_app_state.cols - split - 2);
 		}
 		rst();
 	}

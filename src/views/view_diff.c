@@ -4,6 +4,7 @@
 
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
@@ -30,15 +31,16 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 	char title[128];
 	if (g_app_state.diff_title[0])
 		snprintf(title, sizeof(title), "%.60s%s", g_app_state.diff_title,
-				 g_app_state.diff_staged ? " [staged]" : "");
+				 g_app_state.diff_staged ? UI->diff_title_staged_suffix : "");
 	else
-		snprintf(title, sizeof(title), "Diff (select file or commit)");
+		snprintf(title, sizeof(title), "%s", UI->diff_title_empty);
 
 	char extra[64];
-	const char *wrap_label = g_app_state.diff_wrap ? "Wrap" : "NoWrap";
+	const char *wrap_label =
+		g_app_state.diff_wrap ? UI->diff_wrap_label_on : UI->diff_wrap_label_off;
 	snprintf(extra, sizeof(extra), " [%s] [%s] [%s] ",
-			 g_app_state.diff_sidebyside ? "Split" : "Unify",
-			 g_app_state.diff_continuous ? "Full" : "Hunk", wrap_label);
+			 g_app_state.diff_sidebyside ? UI->diff_side_split : UI->diff_side_unify,
+			 g_app_state.diff_continuous ? UI->diff_ctx_full : UI->diff_ctx_hunk, wrap_label);
 
 	box_top(top, render_x, render_width, title, act, extra);
 	box_sides(top, render_x, render_width, h, act);
@@ -53,7 +55,7 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 	if (!g_app_state.diff_count) {
 		at(row + vis / 2, render_x + render_width / 2 - 12);
 		cfg(TH->fg_dim);
-		ppad("(no diff — select a file or commit)", 35);
+		ppad(UI->diff_empty_msg, 35);
 		rst();
 		return;
 	}
@@ -76,9 +78,9 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 		cbg(TH->bg_header);
 		cfg(TH->fg_accent3);
 		g_app_state.cur_bold = true;
-		ppad(" ◀ OLD", half - 1);
+		ppad(UI->diff_label_old, half - 1);
 		at(row, render_x + half + 1);
-		ppad(" NEW ▶ ", (render_width - half) - 1);
+		ppad(UI->diff_label_new, (render_width - half) - 1);
 		rst();
 		row++;
 		lim--;

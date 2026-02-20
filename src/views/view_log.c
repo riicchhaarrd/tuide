@@ -3,12 +3,13 @@
 
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
 void draw_log(int top, int h) {
 	int w = g_app_state.cols;
-	box_top(top, 1, w, "Commit Log", true, NULL);
+	box_top(top, 1, w, UI->title_commit_log, true, NULL);
 	box_sides(top, 1, w, h, true);
 	box_fill(top, 1, w, h, TH->bg_base);
 	box_bot(top + h - 1, 1, w, true);
@@ -26,11 +27,11 @@ void draw_log(int top, int h) {
 	cfg(TH->fg_accent3);
 	g_app_state.cur_bold = true;
 	int cursor_col = 2;
-	ppad("Graph", GRAPH_COLS);
+	ppad(UI->header_commit_graph, GRAPH_COLS);
 	cursor_col += GRAPH_COLS;
 
 	int hx = cursor_col + g_app_state.col_hash_w;
-	ppad("Hash", g_app_state.col_hash_w);
+	ppad(UI->header_commit_hash, g_app_state.col_hash_w);
 	at(row, hx);
 	if (g_app_state.dragging_col_hash)
 		cfg(TH->fg_accent1);
@@ -40,11 +41,11 @@ void draw_log(int top, int h) {
 	cursor_col = hx + 1;
 
 	cfg(TH->fg_accent3);
-	ppad("Refs", 21);
+	ppad(UI->header_commit_refs, 21);
 	cursor_col += 21;
 
 	int ax = cursor_col + g_app_state.col_author_w;
-	ppad("Author", g_app_state.col_author_w);
+	ppad(UI->header_commit_author, g_app_state.col_author_w);
 	at(row, ax);
 	if (g_app_state.dragging_col_author)
 		cfg(TH->fg_accent1);
@@ -55,7 +56,7 @@ void draw_log(int top, int h) {
 
 	cfg(TH->fg_accent3);
 	int dx = cursor_col + g_app_state.col_date_w;
-	ppad("Date", g_app_state.col_date_w);
+	ppad(UI->header_commit_date, g_app_state.col_date_w);
 	at(row, dx);
 	if (g_app_state.dragging_col_date)
 		cfg(TH->fg_accent1);
@@ -65,7 +66,7 @@ void draw_log(int top, int h) {
 	cursor_col = dx + 1;
 
 	cfg(TH->fg_accent3);
-	ppad("Subject", w - cursor_col - 1);
+	ppad(UI->header_commit_subject, w - cursor_col - 1);
 	rst();
 	row++;
 	vis--;

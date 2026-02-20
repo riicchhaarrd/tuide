@@ -18,6 +18,7 @@
 #include "term.h"
 #include "ui.h"
 #include "util.h"
+#include "strings.h"
 
 static volatile int resize_pending = 0;
 
@@ -90,16 +91,17 @@ int main(int argc, char **argv) {
 	const char *edit_path = find_editor_path(argc, argv);
 	bool editor_mode = (edit_path != NULL);
 	if (!ensure_tty()) {
-		fprintf(stderr, "tuide: requires a terminal\n");
+		fprintf(stderr, "%s\n", UI->err_requires_terminal);
 		return 1;
 	}
 	bool in_repo = in_git_repo();
 	if (!editor_mode && !in_repo) {
-		fprintf(stderr, "tuide: not a git repository\n");
+		fprintf(stderr, "%s\n", UI->err_not_git_repo);
 		return 1;
 	}
 	if (editor_mode && !ensure_file_exists(edit_path)) {
-		fprintf(stderr, "tuide: failed to open %s\n", edit_path);
+		fprintf(stderr, UI->err_failed_open_fmt, edit_path);
+		fputc('\n', stderr);
 		return 1;
 	}
 
@@ -124,7 +126,8 @@ int main(int argc, char **argv) {
 	if (editor_mode) {
 		editor_load(edit_path);
 		if (!g_app_state.tabs[g_app_state.tab_current].path[0]) {
-			fprintf(stderr, "tuide: failed to open %s\n", edit_path);
+			fprintf(stderr, UI->err_failed_open_fmt, edit_path);
+			fputc('\n', stderr);
 			return 1;
 		}
 		if (!is_git_internal_path(edit_path)) {
@@ -166,6 +169,6 @@ int main(int argc, char **argv) {
 	term_restore();
 	free(g_app_state.front.cells);
 	free(g_app_state.back.cells);
-	printf("tuide — bye!\n");
+	printf("%s\n", UI->exit_message);
 	return 0;
 }

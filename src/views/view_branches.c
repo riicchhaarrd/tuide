@@ -4,12 +4,13 @@
 
 #include "../render.h"
 #include "../state.h"
+#include "../strings.h"
 #include "../util.h"
 #include "../views.h"
 
 void draw_branches(int top, int h) {
 	int w = g_app_state.cols;
-	box_top(top, 1, w, "Branches", true, NULL);
+	box_top(top, 1, w, UI->title_branches, true, NULL);
 	box_sides(top, 1, w, h, true);
 	box_fill(top, 1, w, h, TH->bg_panel);
 	box_bot(top + h - 1, 1, w, true);
@@ -29,7 +30,8 @@ void draw_branches(int top, int h) {
 	cfg(TH->fg_accent3);
 	g_app_state.cur_bold = true;
 	char hdb[256];
-	snprintf(hdb, sizeof(hdb), "  %-2s %-40s %-28s %s", "★", "Name", "Upstream", "±");
+	snprintf(hdb, sizeof(hdb), "  %-2s %-40s %-28s %s", "★", UI->header_branches_name,
+			 UI->header_branches_upstream, UI->header_branches_delta);
 	ppad(hdb, w - 3);
 	rst();
 	row++;

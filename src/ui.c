@@ -11,6 +11,7 @@
 
 #include "git.h"
 #include "render.h"
+#include "strings.h"
 #include "views.h"
 
 void set_status(bool err, const char *fmt, ...) {
@@ -128,16 +129,16 @@ void draw_tabbar(void) {
 	cbg(TH->bg_tab_inact);
 	cfg(TH->fg_accent2);
 	g_app_state.cur_bold = true;
-	ppad(" ⎇ tuide ", 9);
+	ppad(UI->tabbar_title, 9);
 	rst();
-	static const struct {
+	struct {
 		const char *n, *k;
 		View v;
-	} tabs[] = {{"Changes", "1", VIEW_STATUS},
-				{"Log", "2", VIEW_LOG},
-				{"Branches", "3", VIEW_BRANCHES},
-				{"Stash", "4", VIEW_STASH},
-				{"Help", "?", VIEW_HELP}};
+	} tabs[] = {{UI->tab_changes, "1", VIEW_STATUS},
+				{UI->tab_log, "2", VIEW_LOG},
+				{UI->tab_branches, "3", VIEW_BRANCHES},
+				{UI->tab_stash, "4", VIEW_STASH},
+				{UI->tab_help, "?", VIEW_HELP}};
 	int cur_c = 10;
 	for (int i = 0; i < 5; i++) {
 		g_app_state.tab_x[i] = cur_c;
@@ -190,65 +191,59 @@ void draw_statusbar(void) {
 	cfg(TH->fg_bright);
 	cbg(TH->fg_accent1);
 	g_app_state.cur_bold = true;
-	const char *fstr = " ??? ";
+	const char *fstr = UI->focus_unknown;
 	switch (g_app_state.focus) {
 		case FOCUS_CHANGES:
-			fstr = " CHANGES ";
+			fstr = UI->focus_changes;
 			break;
 		case FOCUS_GRAPH:
-			fstr = " GRAPH   ";
+			fstr = UI->focus_graph;
 			break;
 		case FOCUS_DIFF:
-			fstr = " DIFF    ";
+			fstr = UI->focus_diff;
 			break;
 		case FOCUS_BROWSER:
-			fstr = " BROWSER ";
+			fstr = UI->focus_browser;
 			break;
 		case FOCUS_EDITOR:
-			fstr = " EDITOR  ";
+			fstr = UI->focus_editor;
 			break;
 		case FOCUS_CLI:
-			fstr = " CLI     ";
+			fstr = UI->focus_cli;
+			break;
+		default:
+			fstr = UI->focus_unknown;
 			break;
 	}
 	ppad(fstr, 10);
 	rst();
 	cbg(TH->bg_panel);
 
-	const char *hint = "";
+	const char *hint = UI->hint_empty;
 	if (g_app_state.current_view == VIEW_STATUS) {
 		if (g_app_state.focus == FOCUS_CHANGES)
-			hint =
-				"c:commit  SPC:stage  a:all  u:unstage  d:discard  e:edit  V:editor  g/G:top/bot  "
-				"W:wrap  "
-				"T:theme";
+			hint = UI->hint_status_changes;
 		else if (g_app_state.focus == FOCUS_GRAPH)
-			hint = "↑/↓:move  SPC/→:expand  ↵:diff  g/G:top/bot  V:editor  W:wrap  T:theme";
+			hint = UI->hint_status_graph;
 		else if (g_app_state.focus == FOCUS_BROWSER)
-			hint = "↑/↓:move  ↵/→:open  ←:back  n:new  D:del  b:close";
+			hint = UI->hint_status_browser;
 		else if (g_app_state.focus == FOCUS_EDITOR)
-			hint =
-				"Arrows:move  Shift+Arrows:select  n/N:find  Ctrl+F:search  Ctrl+Z:undo  "
-				"Ctrl+S:save  Ctrl+Q:quit  "
-				"V:editor";
+			hint = UI->hint_status_editor;
 		else
-			hint = "↑/↓:scroll  g/G:top/bot  s:split  W:wrap  q:back  T:theme";
+			hint = UI->hint_status_diff;
 	} else if (g_app_state.current_view == VIEW_LOG)
-		hint = "e:edit  ↑/↓:move  ↵:diff  n:branch  s:side-by-side  T:theme";
+		hint = UI->hint_log;
 	else if (g_app_state.current_view == VIEW_BRANCHES)
-		hint = "↵:checkout  n:new  D:delete";
+		hint = UI->hint_branches;
 	else if (g_app_state.current_view == VIEW_STASH)
-		hint = "↵:apply  p:pop  D:drop  s:stash";
+		hint = UI->hint_stash;
 	else if (g_app_state.current_view == VIEW_EDITOR) {
 		if (g_app_state.focus == FOCUS_BROWSER)
-			hint = "↑/↓:move  ↵/→:open/enter  ←:back  Tab:editor";
+			hint = UI->hint_editor_browser;
 		else
-			hint =
-				"Arrows:move  Shift:select  n/N:find next/prev  Ctrl+F:search  Ctrl+Z:undo  "
-				"Ctrl+Y:redo  Ctrl+Q:quit  "
-				"Ctrl+X:cut  Ctrl+C:copy  Ctrl+S:save";
+			hint = UI->hint_editor_editor;
 	} else if (g_app_state.current_view == VIEW_HELP)
-		hint = "q:close help";
+		hint = UI->hint_help;
 
 	cfg(TH->fg_dim);
 	ppad(" ", 1);
@@ -281,7 +276,7 @@ void draw_cli(void) {
 		cbg(TH->bg_panel);
 		cfg(TH->fg_dim);
 	}
-	ppad(" $ ", 3);
+	ppad(UI->cli_prompt, 3);
 	if (focused) {
 		cfg(TH->fg_bright);
 	} else {
@@ -379,11 +374,11 @@ void draw_sidebar(void) {
 		cfg(TH->bg_panel);
 		cbg(TH->fg_accent1);
 		g_app_state.cur_bold = true;
-		ppad(" ▶ BROWSER", 10);
+		ppad(UI->sidebar_browser_active, 10);
 	} else {
 		cfg(TH->fg_dim);
 		cbg(TH->bg_panel);
-		ppad("   BROWSER", 10);
+		ppad(UI->sidebar_browser_inactive, 10);
 	}
 
 	at(top + 3, 1);
@@ -392,11 +387,11 @@ void draw_sidebar(void) {
 		cfg(TH->bg_panel);
 		cbg(TH->fg_accent1);
 		g_app_state.cur_bold = true;
-		ppad(" ▶ GIT    ", 10);
+		ppad(UI->sidebar_git_active, 10);
 	} else {
 		cfg(TH->fg_dim);
 		cbg(TH->bg_panel);
-		ppad("   GIT    ", 10);
+		ppad(UI->sidebar_git_inactive, 10);
 	}
 
 	rst();
@@ -494,7 +489,7 @@ void draw_menu(void) {
 	g_app_state.menu_x = x;
 	g_app_state.menu_y = y;
 
-	box_top(y, x, w, "Menu", true, NULL);
+	box_top(y, x, w, UI->menu_title, true, NULL);
 	box_sides(y, x, w, h, true);
 	box_fill(y, x, w, h, TH->bg_panel);
 	box_bot(y + h - 1, x, w, true);
@@ -564,7 +559,7 @@ static void prompt_cancel(void) {
 	g_app_state.prompt_buf[0] = '\0';
 	g_app_state.prompt_cursor = 0;
 	g_app_state.prompt_cb = NULL;
-	OK("Cancelled");
+	OK("%s", UI->msg_cancelled);
 }
 
 void handle_prompt_key(Key k) {
@@ -625,13 +620,13 @@ void handle_cli_key(Key k) {
 		if (g_app_state.cli_buf[0]) {
 			char cmd[INPUT_MAX];
 			snprintf(cmd, sizeof(cmd), "%s", g_app_state.cli_buf);
-			OK("Executing: %s", cmd);
+			OK(UI->msg_cli_executing_fmt, cmd);
 			/* Draw not strictly needed if loop continues, but OK */
 			int r = system(cmd);
 			if (r == 0)
-				OK("Success: %s", cmd);
+				OK(UI->msg_cli_success_fmt, cmd);
 			else
-				ERR("Failed (%d): %s", r, cmd);
+				ERR(UI->msg_cli_failed_fmt, r, cmd);
 			g_app_state.cli_buf[0] = '\0';
 			g_app_state.cli_cursor = 0;
 			reload_all();
