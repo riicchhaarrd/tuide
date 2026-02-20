@@ -1206,7 +1206,7 @@ void handle_key(Key k) {
 				}
 				/* Check for unsaved changes before quitting */
 				if (editor_has_unsaved_changes()) {
-					dialog_show("Quit with unsaved changes?", editor_confirm_quit, NULL);
+					dialog_show("Save changes before quitting?", editor_confirm_quit, NULL);
 				} else {
 					g_app_state.running = false;
 				}

@@ -212,7 +212,8 @@ void editor_prev_tab(void) {
 	if (slots <= 1) return;
 	editor_select_visible_tab((editor_current_slot() + slots - 1) % slots);
 }
-static void do_close_tab(void) {
+/* Close tab without saving */
+static void do_close_tab_unsaved(void) {
 	if (g_app_state.tab_count == 0) return;
 	editor_free(&g_app_state.tabs[g_app_state.tab_current].ed);
 	for (int i = g_app_state.tab_current; i < g_app_state.tab_count - 1; i++)
@@ -227,6 +228,12 @@ static void do_close_tab(void) {
 		g_app_state.tabs[g_app_state.tab_current].ed.needs_sync = true;
 		g_app_state.focus = FOCUS_EDITOR;
 	}
+}
+
+/* Save then close tab */
+static void do_save_and_close_tab(void) {
+	editor_save();
+	do_close_tab_unsaved();
 }
 
 void editor_close_tab(void) {
@@ -245,10 +252,10 @@ void editor_close_tab(void) {
 		const char *filename = g_app_state.tabs[g_app_state.tab_current].ed.filename;
 		const char *basename = strrchr(filename, '/');
 		basename = basename ? basename + 1 : filename;
-		snprintf(msg, sizeof(msg), "Close '%s' with unsaved changes?", basename);
-		dialog_show(msg, do_close_tab, NULL);
+		snprintf(msg, sizeof(msg), "Save changes to '%s'?", basename);
+		dialog_show(msg, do_save_and_close_tab, do_close_tab_unsaved);
 	} else {
-		do_close_tab();
+		do_close_tab_unsaved();
 	}
 }
 
@@ -285,9 +292,29 @@ bool editor_has_unsaved_changes(void) {
 	return false;
 }
 
-/* Callback for quitting after confirmation */
-void editor_confirm_quit(void) {
+/* Quit without saving */
+static void do_quit_unsaved(void) {
 	g_app_state.running = false;
+}
+
+/* Save all then quit */
+static void do_save_and_quit(void) {
+	/* Save all modified tabs */
+	for (int i = 0; i < g_app_state.tab_count; i++) {
+		if (g_app_state.tabs[i].ed.modified) {
+			g_app_state.tab_current = i;
+			editor_save();
+		}
+	}
+	g_app_state.running = false;
+}
+
+void editor_confirm_quit(void) {
+	do_save_and_quit();
+}
+
+void editor_cancel_quit(void) {
+	/* Do nothing, just cancel */
 }
 
 static void editor_insert_char(char char_to_insert) {
@@ -755,7 +782,7 @@ void handle_editor_key(Key key_event) {
 			break;
 		case KEY_CTRL_Q:
 			if (editor_has_unsaved_changes()) {
-				dialog_show("Quit with unsaved changes?", editor_confirm_quit, NULL);
+				dialog_show("Save changes before quitting?", do_save_and_quit, do_quit_unsaved);
 			} else {
 				g_app_state.running = false;
 			}
