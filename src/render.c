@@ -9,6 +9,7 @@
 #include <locale.h>
 
 #include "term.h"
+#include "config.h"
 
 /* Dark+ (VSCode Dark+) */
 static const Theme TH_DARK = {"Dark+ (VSCode)",
@@ -158,7 +159,144 @@ static const Theme TH_ONEDARK = {"One Dark",
 								 {224, 108, 117},
 								 {92, 99, 112}};
 
-const Theme *THEMES[] = {&TH_DARK, &TH_VSLIGHT, &TH_SOL, &TH_ONEDARK};
+/* Dynamic theme array and count */
+Theme *THEMES[16] = {NULL};
+int NTHEMES = THEME_COUNT;
+
+/* Built-in themes array */
+static Theme *builtin_themes[THEME_COUNT] = {
+	(Theme *)&TH_DARK,
+	(Theme *)&TH_VSLIGHT,
+	(Theme *)&TH_SOL,
+	(Theme *)&TH_ONEDARK
+};
+
+/* Initialize theme system */
+void themes_init(void) {
+	/* Initialize with built-in themes */
+	for (int i = 0; i < THEME_COUNT; i++) {
+		THEMES[i] = builtin_themes[i];
+	}
+	NTHEMES = THEME_COUNT;
+
+	/* Load custom theme from config if specified */
+	if (g_config.loaded && g_config.custom_theme_path[0]) {
+		theme_load_custom(g_config.custom_theme_path);
+	}
+}
+
+/* Cleanup theme system */
+void themes_cleanup(void) {
+	/* Free custom themes (indices THEME_COUNT and above) */
+	for (int i = THEME_COUNT; i < NTHEMES && i < 16; i++) {
+		if (THEMES[i]) {
+			free(THEMES[i]);
+			THEMES[i] = NULL;
+		}
+	}
+	/* Reset to built-in themes only */
+	for (int i = 0; i < THEME_COUNT; i++) {
+		THEMES[i] = builtin_themes[i];
+	}
+	NTHEMES = THEME_COUNT;
+}
+
+/* Convert ConfigColor to Color */
+static Color configcolor_to_color(ConfigColor cc) {
+	Color c;
+	c.r = cc.r;
+	c.g = cc.g;
+	c.b = cc.b;
+	return c;
+}
+
+/* Load custom theme from file */
+bool theme_load_custom(const char *path) {
+	if (!path) return false;
+
+	ConfigTheme cfg_theme;
+	if (!config_parse_theme(path, &cfg_theme)) {
+		return false;
+	}
+
+	/* Allocate new theme */
+	Theme *theme = calloc(1, sizeof(Theme));
+	if (!theme) return false;
+
+	/* Convert ConfigTheme to Theme */
+	theme->name = strdup(cfg_theme.name);
+	theme->bg_base = configcolor_to_color(cfg_theme.bg_base);
+	theme->bg_panel = configcolor_to_color(cfg_theme.bg_panel);
+	theme->bg_sel = configcolor_to_color(cfg_theme.bg_sel);
+	theme->bg_tab_act = configcolor_to_color(cfg_theme.bg_tab_act);
+	theme->bg_tab_inact = configcolor_to_color(cfg_theme.bg_tab_inact);
+	theme->bg_header = configcolor_to_color(cfg_theme.bg_header);
+	theme->bg_diff_add = configcolor_to_color(cfg_theme.bg_diff_add);
+	theme->bg_diff_del = configcolor_to_color(cfg_theme.bg_diff_del);
+	theme->bg_diff_hdr = configcolor_to_color(cfg_theme.bg_diff_hdr);
+
+	theme->fg_normal = configcolor_to_color(cfg_theme.fg_normal);
+	theme->fg_dim = configcolor_to_color(cfg_theme.fg_dim);
+	theme->fg_bright = configcolor_to_color(cfg_theme.fg_bright);
+	theme->fg_sel = configcolor_to_color(cfg_theme.fg_sel);
+	theme->fg_accent1 = configcolor_to_color(cfg_theme.fg_accent1);
+	theme->fg_accent2 = configcolor_to_color(cfg_theme.fg_accent2);
+	theme->fg_accent3 = configcolor_to_color(cfg_theme.fg_accent3);
+
+	theme->fg_staged = configcolor_to_color(cfg_theme.fg_staged);
+	theme->fg_unstaged = configcolor_to_color(cfg_theme.fg_unstaged);
+	theme->fg_untracked = configcolor_to_color(cfg_theme.fg_untracked);
+	theme->fg_conflict = configcolor_to_color(cfg_theme.fg_conflict);
+
+	theme->fg_diff_add = configcolor_to_color(cfg_theme.fg_diff_add);
+	theme->fg_diff_del = configcolor_to_color(cfg_theme.fg_diff_del);
+	theme->fg_diff_hdr = configcolor_to_color(cfg_theme.fg_diff_hdr);
+	theme->fg_diff_ctx = configcolor_to_color(cfg_theme.fg_diff_ctx);
+
+	for (int i = 0; i < 6; i++) {
+		theme->fg_graph[i] = configcolor_to_color(cfg_theme.fg_graph[i]);
+	}
+
+	theme->fg_ref_local = configcolor_to_color(cfg_theme.fg_ref_local);
+	theme->fg_ref_remote = configcolor_to_color(cfg_theme.fg_ref_remote);
+	theme->fg_ref_tag = configcolor_to_color(cfg_theme.fg_ref_tag);
+
+	theme->fg_ok = configcolor_to_color(cfg_theme.fg_ok);
+	theme->fg_err = configcolor_to_color(cfg_theme.fg_err);
+	theme->fg_linenum = configcolor_to_color(cfg_theme.fg_linenum);
+
+	/* Add to themes array */
+	if (NTHEMES < 16) {
+		THEMES[NTHEMES++] = theme;
+		return true;
+	} else {
+		/* Replace first custom theme if array is full */
+		free((void *)theme->name);
+		free(theme);
+		return false;
+	}
+}
+
+/* Find theme by name */
+int theme_find_by_name(const char *name) {
+	if (!name) return -1;
+
+	/* Check built-in themes first */
+	for (int i = 0; i < NTHEMES; i++) {
+		if (THEMES[i] && strcmp(THEMES[i]->name, name) == 0) {
+			return i;
+		}
+	}
+
+	/* Check for partial matches (for "Dark+" vs "Dark+ (VSCode)") */
+	for (int i = 0; i < NTHEMES; i++) {
+		if (THEMES[i] && strstr(THEMES[i]->name, name) != NULL) {
+			return i;
+		}
+	}
+
+	return -1;
+}
 
 void buf_clear(Buffer *b) {
 	if (!b->cells) return;

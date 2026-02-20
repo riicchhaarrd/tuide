@@ -17,9 +17,19 @@ typedef struct {
 	Color fg_ok, fg_err, fg_linenum;
 } Theme;
 
-#define NTHEMES 4
-extern const Theme *THEMES[NTHEMES];
+/* Built-in theme count */
+#define THEME_COUNT 4
+
+/* Total themes (built-in + custom) */
+extern int NTHEMES;
+extern Theme *THEMES[];
 #define TH (THEMES[g_app_state.theme_idx])
+
+/* Theme management functions */
+void themes_init(void);
+void themes_cleanup(void);
+bool theme_load_custom(const char *path);
+int theme_find_by_name(const char *name);
 
 /* Drawing Primitives */
 void buf_clear(Buffer *b);

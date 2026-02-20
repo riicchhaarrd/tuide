@@ -20,6 +20,7 @@
 #include "ui.h"
 #include "util.h"
 #include "strings.h"
+#include "config.h"
 
 static volatile int resize_pending = 0;
 
@@ -107,11 +108,29 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
+	/* Load configuration */
+	config_load();
+
 	memset(&g_app_state, 0, sizeof(g_app_state));
+
+	/* Initialize theme system with built-in and custom themes */
+	themes_init();
+
 	g_app_state.running = true;
 	g_app_state.current_view = VIEW_STATUS;
 	g_app_state.focus = editor_mode ? FOCUS_EDITOR : FOCUS_CHANGES;
+
+	/* Set theme from config */
 	g_app_state.theme_idx = 0;
+	if (g_config.loaded && g_config.general.theme_name[0]) {
+		int theme_idx = theme_find_by_name(g_config.general.theme_name);
+		if (theme_idx >= 0) {
+			g_app_state.theme_idx = theme_idx;
+		}
+	}
+
+	/* Apply general configuration settings */
+	config_apply_general();
 	g_app_state.clipboard = NULL;
 	g_app_state.col_hash_w = 9;
 	g_app_state.col_author_w = 14;
@@ -172,6 +191,10 @@ int main(int argc, char **argv) {
 	term_restore();
 	free(g_app_state.front.cells);
 	free(g_app_state.back.cells);
+
+	/* Cleanup themes */
+	themes_cleanup();
+
 	printf("%s\n", UI->exit_message);
 	return 0;
 }
