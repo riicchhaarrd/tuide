@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../editor.h"
 #include "../render.h"
 #include "../state.h"
 #include "../strings.h"
@@ -28,6 +29,9 @@ static int diff_wrap_slice(const char *text, int text_len, int code_w, int wr, c
 void draw_diff(int top, int render_x, int render_width, int h) {
 	if (h <= 2) return;
 	bool act = (g_app_state.focus == FOCUS_DIFF);
+	bool mixed_tabs =
+		((g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR) &&
+		 editor_current_tab_is_diff());
 	char title[128];
 	if (g_app_state.diff_title[0])
 		snprintf(title, sizeof(title), "%.60s%s", g_app_state.diff_title,
@@ -47,7 +51,11 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 	box_fill(top, render_x, render_width, h, TH->bg_base);
 	box_bot(top + h - 1, render_x, render_width, act);
 
-	int row = top + 1, lim = top + h - 1, vis = lim - row;
+	int content_top = top + 1 + (mixed_tabs ? 1 : 0);
+	if (mixed_tabs) draw_editor_tabs_row(top + 1, render_x, render_width);
+
+	int row = content_top, lim = top + h - 1, vis = lim - row;
+	if (vis < 1) return;
 	int maxsc = imax(0, g_app_state.diff_count - vis);
 	if (g_app_state.diff_scroll < 0) g_app_state.diff_scroll = 0;
 	if (g_app_state.diff_scroll > maxsc) g_app_state.diff_scroll = maxsc;
@@ -552,7 +560,7 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 	if (g_app_state.diff_count > vis && vis > 2) {
 		int bh = imax(1, (vis * vis) / g_app_state.diff_count);
 		int bpos = maxsc > 0 ? ((g_app_state.diff_scroll * (vis - bh)) / maxsc) : 0;
-		g_app_state.scrollbar_y = top + 1;
+		g_app_state.scrollbar_y = content_top;
 		g_app_state.scrollbar_height = vis;
 		g_app_state.scrollbar_total = g_app_state.diff_count;
 		g_app_state.scrollbar_visible = vis;
@@ -573,7 +581,7 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 		for (int r = 0; r < vis; r++) {
 			bool thumb = (r >= bpos && r < bpos + bh);
 			for (int sw = 0; sw < 3; sw++) {
-				at(top + 1 + r, render_x + render_width - 1 - sw);
+				at(content_top + r, render_x + render_width - 1 - sw);
 				if (thumb) {
 					if (g_app_state.dragging_sc)
 						cfg(TH->fg_sel);
@@ -581,20 +589,20 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 						cfg(TH->fg_accent1);
 					else
 						cfg(TH->fg_accent2);
-					put_cell(top + 1 + r, render_x + render_width - 1 - sw, "█");
+					put_cell(content_top + r, render_x + render_width - 1 - sw, "█");
 				} else {
 					if (markers && markers[r] == 1) {
 						cfg(TH->fg_staged);
-						put_cell(top + 1 + r, render_x + render_width - 1 - sw, "▒");
+						put_cell(content_top + r, render_x + render_width - 1 - sw, "▒");
 					} else if (markers && markers[r] == 2) {
 						cfg(TH->fg_unstaged);
-						put_cell(top + 1 + r, render_x + render_width - 1 - sw, "▒");
+						put_cell(content_top + r, render_x + render_width - 1 - sw, "▒");
 					} else if (markers && markers[r] == 3) {
 						cfg(TH->fg_accent1);
-						put_cell(top + 1 + r, render_x + render_width - 1 - sw, "▒");
+						put_cell(content_top + r, render_x + render_width - 1 - sw, "▒");
 					} else {
 						cfg(TH->fg_dim);
-						put_cell(top + 1 + r, render_x + render_width - 1 - sw,
+						put_cell(content_top + r, render_x + render_width - 1 - sw,
 								 sw == 0 ? "│" : " ");
 					}
 				}

@@ -10,5 +10,6 @@ void draw_stash(int top, int h);
 void draw_help(int top, int h);
 void draw_editor(int top, int render_x, int render_width, int h);
 void draw_browser(int top, int h);
+void draw_editor_tabs_row(int row, int render_x, int render_width);
 
 #endif

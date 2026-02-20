@@ -71,41 +71,38 @@ void draw_browser(int top, int h) {
 	box_bot(top + h - 1, sx, w, act);
 }
 
-void draw_editor(int top, int render_x, int render_width, int h) {
-	if (g_app_state.tab_count == 0) {
-		box_top(top, render_x, render_width, UI->title_editor,
-				(g_app_state.focus == FOCUS_EDITOR), NULL);
-		box_sides(top, render_x, render_width, h, (g_app_state.focus == FOCUS_EDITOR));
-		box_fill(top, render_x, render_width, h, TH->bg_base);
-		int msg_w = str_display_width(UI->editor_no_files);
-		int max_w = render_width - 2;
-		if (max_w < 1) max_w = 1;
-		int draw_w = iclamp(msg_w, 1, max_w);
-		int msg_x = render_x + (render_width - draw_w) / 2;
-		at(top + h / 2, msg_x);
-		cfg(TH->fg_dim);
-		ppad(UI->editor_no_files, draw_w);
-		box_bot(top + h - 1, render_x, render_width, (g_app_state.focus == FOCUS_EDITOR));
-		return;
-	}
-	Tab *t = &g_app_state.tabs[g_app_state.tab_current];
-	Editor *ed = &t->ed;
-	bool act = (g_app_state.focus == FOCUS_EDITOR);
-
-	char title[512];
-	snprintf(title, sizeof(title), " %s ", t->path);
-	box_top(top, render_x, render_width, UI->title_editor, act, UI->title_editor_save);
-	box_sides(top, render_x, render_width, h, act);
-	box_fill(top, render_x, render_width, h, TH->bg_base);
-
-	at(top + 1, render_x + 1);
+void draw_editor_tabs_row(int row, int render_x, int render_width) {
+	at(row, render_x + 1);
 	cbg(TH->bg_panel);
-	for (int i = 0; i < render_width - 2; i++) put_cell(top + 1, render_x + 1 + i, " ");
+	for (int i = 0; i < render_width - 2; i++) put_cell(row, render_x + 1 + i, " ");
 
 	int cur_tab_x = render_x + 1;
+	int slot = 0;
+	int total_slots = editor_visible_tab_count();
+
+	at(row, cur_tab_x);
+	if (editor_current_tab_is_diff()) {
+		cbg(TH->bg_base);
+		cfg(TH->fg_bright);
+		g_app_state.cur_bold = true;
+	} else {
+		cbg(TH->bg_panel);
+		cfg(TH->fg_dim);
+	}
+	char dbuf[64];
+	int dtab_w = snprintf(dbuf, sizeof(dbuf), "  Diff  ");
+	ppad(dbuf, dtab_w);
+	g_app_state.ed_tab_x[slot++] = cur_tab_x;
+	cur_tab_x += dtab_w;
+	if (!editor_current_tab_is_diff()) {
+		cfg(TH->fg_dim);
+		put_cell(row, cur_tab_x - 1, "│");
+	}
+	rst();
+
 	for (int i = 0; i < g_app_state.tab_count; i++) {
-		bool cur = (i == g_app_state.tab_current);
-		at(top + 1, cur_tab_x);
+		bool cur = (!editor_current_tab_is_diff() && i == g_app_state.tab_current);
+		at(row, cur_tab_x);
 		if (cur) {
 			cbg(TH->bg_base);
 			cfg(TH->fg_bright);
@@ -123,16 +120,50 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 							 g_app_state.tabs[i].ed.modified ? "*" : "");
 		ppad(tbuf, tab_w);
 
-		g_app_state.ed_tab_x[i] = cur_tab_x;
-		if (i == g_app_state.tab_count - 1) g_app_state.ed_tab_x[i + 1] = cur_tab_x + tab_w;
-
+		g_app_state.ed_tab_x[slot++] = cur_tab_x;
 		cur_tab_x += tab_w;
 		if (!cur) {
 			cfg(TH->fg_dim);
-			put_cell(top + 1, cur_tab_x - 1, "│");
+			put_cell(row, cur_tab_x - 1, "│");
 		}
 		rst();
 	}
+
+	g_app_state.ed_tab_x[slot] = cur_tab_x;
+	for (int i = slot + 1; i <= total_slots; i++) g_app_state.ed_tab_x[i] = cur_tab_x;
+}
+
+void draw_editor(int top, int render_x, int render_width, int h) {
+	if (editor_current_tab_is_diff()) {
+		draw_diff(top, render_x, render_width, h);
+		return;
+	}
+
+	if (g_app_state.tab_count == 0) {
+		box_top(top, render_x, render_width, UI->title_editor,
+				(g_app_state.focus == FOCUS_EDITOR), NULL);
+		box_sides(top, render_x, render_width, h, (g_app_state.focus == FOCUS_EDITOR));
+		box_fill(top, render_x, render_width, h, TH->bg_base);
+		draw_editor_tabs_row(top + 1, render_x, render_width);
+		int msg_w = str_display_width(UI->editor_no_files);
+		int max_w = render_width - 2;
+		if (max_w < 1) max_w = 1;
+		int draw_w = iclamp(msg_w, 1, max_w);
+		int msg_x = render_x + (render_width - draw_w) / 2;
+		at(top + h / 2, msg_x);
+		cfg(TH->fg_dim);
+		ppad(UI->editor_no_files, draw_w);
+		box_bot(top + h - 1, render_x, render_width, (g_app_state.focus == FOCUS_EDITOR));
+		return;
+	}
+	Tab *t = &g_app_state.tabs[g_app_state.tab_current];
+	Editor *ed = &t->ed;
+	bool act = (g_app_state.focus == FOCUS_EDITOR);
+
+	box_top(top, render_x, render_width, UI->title_editor, act, UI->title_editor_save);
+	box_sides(top, render_x, render_width, h, act);
+	box_fill(top, render_x, render_width, h, TH->bg_base);
+	draw_editor_tabs_row(top + 1, render_x, render_width);
 
 	int row = top + 2, lim = top + h - 1, vis = lim - row;
 	if (ed->needs_sync) {

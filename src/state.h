@@ -190,6 +190,7 @@ typedef struct {
 	/* Editor & Browser */
 	Tab tabs[MAX_TABS];
 	int tab_count, tab_current;
+	bool editor_diff_tab;
 
 	BrowserFile browser_files[1024];
 	int browser_count, browser_sel, browser_scroll;
@@ -219,7 +220,7 @@ typedef struct {
 	int editor_scrollbar_x, editor_scrollbar_y, editor_scrollbar_height, editor_scrollbar_total,
 		editor_scrollbar_visible, editor_scrollbar_drag_offset;
 	int tab_x[7];
-	int ed_tab_x[MAX_TABS + 1];
+	int ed_tab_x[MAX_TABS + 2];
 
 	/* Commit Bar */
 	char commit_msg_buf[INPUT_MAX];

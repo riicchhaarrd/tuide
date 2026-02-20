@@ -128,6 +128,35 @@ void editor_redo(Editor *ed) {
 	OK("%s", UI->msg_redo);
 }
 
+static int editor_slot_count(void) { return g_app_state.tab_count + 1; }
+
+static int editor_current_slot(void) {
+	if (g_app_state.editor_diff_tab || g_app_state.tab_count == 0) return 0;
+	return g_app_state.tab_current + 1;
+}
+
+int editor_visible_tab_count(void) { return editor_slot_count(); }
+
+bool editor_current_tab_is_diff(void) {
+	return g_app_state.editor_diff_tab;
+}
+
+void editor_select_visible_tab(int idx) {
+	int slots = editor_slot_count();
+	if (slots <= 0) return;
+	idx = iclamp(idx, 0, slots - 1);
+	g_app_state.ed_selecting = false;
+	if (idx == 0) {
+		g_app_state.editor_diff_tab = true;
+		g_app_state.focus = FOCUS_DIFF;
+		return;
+	}
+	g_app_state.editor_diff_tab = false;
+	g_app_state.tab_current = idx - 1;
+	g_app_state.tabs[g_app_state.tab_current].ed.needs_sync = true;
+	g_app_state.focus = FOCUS_EDITOR;
+}
+
 void editor_load(const char *path) {
 	char real[PATH_MAX];
 	if (!realpath(path, real)) snprintf(real, sizeof(real), "%s", path);
@@ -135,6 +164,7 @@ void editor_load(const char *path) {
 	for (int i = 0; i < g_app_state.tab_count; i++) {
 		if (strcmp(g_app_state.tabs[i].path, real) == 0) {
 			g_app_state.tab_current = i;
+			g_app_state.editor_diff_tab = false;
 			g_app_state.tabs[i].ed.needs_sync = true;
 			return;
 		}
@@ -169,18 +199,27 @@ void editor_load(const char *path) {
 		t->ed.lines[t->ed.line_count++] = strdup("");
 	}
 	t->ed.saved_hash = editor_content_hash(&t->ed);
+	g_app_state.editor_diff_tab = false;
 }
 
 void editor_next_tab(void) {
-	if (g_app_state.tab_count > 1)
-		g_app_state.tab_current = (g_app_state.tab_current + 1) % g_app_state.tab_count;
+	int slots = editor_slot_count();
+	if (slots <= 1) return;
+	editor_select_visible_tab((editor_current_slot() + 1) % slots);
 }
 void editor_prev_tab(void) {
-	if (g_app_state.tab_count > 1)
-		g_app_state.tab_current =
-			(g_app_state.tab_current + g_app_state.tab_count - 1) % g_app_state.tab_count;
+	int slots = editor_slot_count();
+	if (slots <= 1) return;
+	editor_select_visible_tab((editor_current_slot() + slots - 1) % slots);
 }
 void editor_close_tab(void) {
+	if (g_app_state.editor_diff_tab) {
+		if (g_app_state.tab_count > 0)
+			editor_select_visible_tab(g_app_state.tab_current + 1);
+		else
+			g_app_state.focus = FOCUS_DIFF;
+		return;
+	}
 	if (g_app_state.tab_count == 0) return;
 	editor_free(&g_app_state.tabs[g_app_state.tab_current].ed);
 	for (int i = g_app_state.tab_current; i < g_app_state.tab_count - 1; i++)
@@ -189,12 +228,16 @@ void editor_close_tab(void) {
 	if (g_app_state.tab_current >= g_app_state.tab_count && g_app_state.tab_count > 0)
 		g_app_state.tab_current = g_app_state.tab_count - 1;
 	if (g_app_state.tab_count == 0) {
-		g_app_state.editor_active = false;
-		g_app_state.focus = g_app_state.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
+		g_app_state.editor_diff_tab = true;
+		g_app_state.focus = FOCUS_DIFF;
+	} else {
+		g_app_state.tabs[g_app_state.tab_current].ed.needs_sync = true;
+		g_app_state.focus = FOCUS_EDITOR;
 	}
 }
 
 void editor_save(void) {
+	if (editor_current_tab_is_diff() || g_app_state.tab_count == 0) return;
 	Tab *t = &g_app_state.tabs[g_app_state.tab_current];
 	if (!t->path[0]) return;
 	FILE *fp = fopen(t->path, "w");
@@ -568,6 +611,13 @@ static void begin_ed_selection(void) {
 
 void handle_editor_key(Key key_event) {
 	if (key_event.type == KEY_TAB || key_event.type == KEY_SHIFT_TAB) return;
+	if (editor_current_tab_is_diff() || g_app_state.tab_count == 0) {
+		if (key_event.type == KEY_F1)
+			editor_prev_tab();
+		else if (key_event.type == KEY_F2)
+			editor_next_tab();
+		return;
+	}
 	CUR_ED.needs_sync = true;
 	switch (key_event.type) {
 		case KEY_UP:

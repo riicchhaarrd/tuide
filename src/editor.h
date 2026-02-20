@@ -9,6 +9,9 @@ void editor_save(void);
 void editor_close_tab(void);
 void editor_next_tab(void);
 void editor_prev_tab(void);
+int editor_visible_tab_count(void);
+bool editor_current_tab_is_diff(void);
+void editor_select_visible_tab(int idx);
 
 void handle_editor_key(Key k);
 

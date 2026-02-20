@@ -1250,6 +1250,8 @@ void action_find_file(const char *name) {
 		line = nl ? nl + 1 : line + len;
 	}
 	free(o);
+	if (g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR)
+		g_app_state.editor_diff_tab = true;
 	g_app_state.focus = FOCUS_DIFF;
 }
 
@@ -1287,5 +1289,7 @@ void action_grep(const char *pattern) {
 		line = nl ? nl + 1 : line + len;
 	}
 	free(o);
+	if (g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR)
+		g_app_state.editor_diff_tab = true;
 	g_app_state.focus = FOCUS_DIFF;
 }

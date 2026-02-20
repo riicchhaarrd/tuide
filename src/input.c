@@ -28,6 +28,31 @@ static void msel(int *sel, int *scr, int cnt, int d, int vis, bool is_graph) {
 	}
 }
 
+static bool right_pane_is_editor_content(void) {
+	bool editor_visible = (g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR);
+	return editor_visible && !editor_current_tab_is_diff() && g_app_state.tab_count > 0;
+}
+
+static FocusPane right_pane_focus_pane(void) {
+	if (right_pane_is_editor_content()) return FOCUS_EDITOR;
+	if (g_app_state.current_view == VIEW_EDITOR && !editor_current_tab_is_diff())
+		return FOCUS_EDITOR;
+	return FOCUS_DIFF;
+}
+
+static void focus_diff_pane(void) {
+	if (g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR)
+		editor_select_visible_tab(0);
+	else
+		g_app_state.focus = FOCUS_DIFF;
+}
+
+static int diff_content_start_row(int pane_top) {
+	bool mixed_tabs = ((g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR) &&
+					   editor_current_tab_is_diff());
+	return pane_top + 1 + (mixed_tabs ? 1 : 0);
+}
+
 static const char *resolve_external_editor(void) {
 	const char *ed = getenv("VISUAL");
 	if (ed && ed[0]) return ed;
@@ -54,7 +79,8 @@ static void action_open_in_editor_extern(const char *path) {
 	term_restore();
 
 	char cmd[1024];
-	if (g_app_state.focus == FOCUS_EDITOR && g_app_state.tab_count > 0) {
+	if (g_app_state.focus == FOCUS_EDITOR && g_app_state.tab_count > 0 &&
+		!editor_current_tab_is_diff()) {
 		snprintf(cmd, sizeof(cmd), "%s '%s'", ed, g_app_state.tabs[g_app_state.tab_current].path);
 	} else if (g_app_state.focus == FOCUS_CHANGES && g_app_state.file_count > 0) {
 		snprintf(cmd, sizeof(cmd), "%s '%s'", ed, g_app_state.files[g_app_state.file_sel].path);
@@ -265,7 +291,7 @@ static void handle_mouse(MouseEvt m) {
 					}
 				}
 			} else {
-				if (g_app_state.editor_active && g_app_state.tab_count > 0) {
+				if (right_pane_is_editor_content()) {
 					Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 					ed->scroll_row = imax(0, ed->scroll_row + delta);
 				} else {
@@ -281,7 +307,7 @@ static void handle_mouse(MouseEvt m) {
 					 step, vis, false);
 				show_log_commit();
 			} else {
-				if (g_app_state.editor_active && g_app_state.tab_count > 0) {
+				if (right_pane_is_editor_content()) {
 					Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 					ed->scroll_row = imax(0, ed->scroll_row + delta);
 				} else {
@@ -294,9 +320,11 @@ static void handle_mouse(MouseEvt m) {
 			int vx = g_app_state.sidebar_w + g_app_state.layout_width;
 			if (m.col <= vx) {
 				g_app_state.browser_scroll = imax(0, g_app_state.browser_scroll + delta);
-			} else if (g_app_state.tab_count > 0) {
+			} else if (right_pane_is_editor_content()) {
 				Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 				ed->scroll_row = imax(0, ed->scroll_row + delta);
+			} else {
+				g_app_state.diff_scroll = imax(0, g_app_state.diff_scroll + delta);
 			}
 		}
 		return;
@@ -418,7 +446,8 @@ static void handle_mouse(MouseEvt m) {
 			return;
 		}
 		if (g_app_state.selecting) {
-			g_app_state.sel_end_y = g_app_state.diff_scroll + (m.row - (dtop + 1));
+			int diff_top = diff_content_start_row(dtop);
+			g_app_state.sel_end_y = g_app_state.diff_scroll + (m.row - diff_top);
 			g_app_state.sel_end_x = m.col - drx - 1;
 			return;
 		}
@@ -469,10 +498,10 @@ static void handle_mouse(MouseEvt m) {
 
 	/* Editor tabs */
 	if (cl && editor_visible && m.row == toggle_row + 1 && m.col > toggle_min_x) {
-		for (int i = 0; i < g_app_state.tab_count; i++) {
+		int slots = editor_visible_tab_count();
+		for (int i = 0; i < slots; i++) {
 			if (m.col >= g_app_state.ed_tab_x[i] && m.col < g_app_state.ed_tab_x[i + 1]) {
-				g_app_state.tab_current = i;
-				g_app_state.focus = FOCUS_EDITOR;
+				editor_select_visible_tab(i);
 				return;
 			}
 		}
@@ -480,8 +509,8 @@ static void handle_mouse(MouseEvt m) {
 
 	/* Right pane header */
 	if (cl && m.row == toggle_row && m.col > toggle_min_x) {
-		if (!editor_visible) {
-			g_app_state.focus = FOCUS_DIFF;
+		if (!right_pane_is_editor_content()) {
+			focus_diff_pane();
 			const char *label_side =
 				g_app_state.diff_sidebyside ? UI->diff_side_split : UI->diff_side_unify;
 			const char *label_ctx =
@@ -514,7 +543,7 @@ static void handle_mouse(MouseEvt m) {
 				g_app_state.diff_wrap = !g_app_state.diff_wrap;
 				return;
 			}
-		} else {
+		} else if (editor_visible) {
 			g_app_state.focus = FOCUS_EDITOR;
 			int save_x = g_app_state.cols - 8;
 			if (m.col >= save_x && m.col < save_x + 6) {
@@ -534,7 +563,7 @@ static void handle_mouse(MouseEvt m) {
 				g_app_state.current_view = vmap[i];
 				if (g_app_state.current_view == VIEW_EDITOR) {
 					if (!g_app_state.browser_count) load_browser(".");
-					g_app_state.focus = FOCUS_EDITOR;
+					g_app_state.focus = right_pane_focus_pane();
 				}
 				return;
 			}
@@ -549,7 +578,7 @@ static void handle_mouse(MouseEvt m) {
 	/* Main Area Clicks */
 	if (cl && (g_app_state.current_view == VIEW_STATUS || g_app_state.current_view == VIEW_LOG) &&
 		m.col > drx && m.row > dtop && m.row < g_app_state.rows - 1) {
-		if (g_app_state.editor_active) {
+		if (right_pane_is_editor_content()) {
 			Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 			if (m.col >= g_app_state.editor_scrollbar_x &&
 				g_app_state.editor_scrollbar_height > 0 &&
@@ -620,11 +649,12 @@ static void handle_mouse(MouseEvt m) {
 				return;
 			}
 
+			int diff_top = diff_content_start_row(dtop);
 			g_app_state.selecting = true;
 			g_app_state.sel_start_y = g_app_state.sel_end_y =
-				g_app_state.diff_scroll + (m.row - (dtop + 1));
+				g_app_state.diff_scroll + (m.row - diff_top);
 			g_app_state.sel_start_x = g_app_state.sel_end_x = m.col - drx - 1;
-			g_app_state.focus = FOCUS_DIFF;
+			focus_diff_pane();
 		}
 	} else if (cl) {
 		g_app_state.selecting = false;
@@ -799,10 +829,11 @@ static void handle_mouse(MouseEvt m) {
 			}
 		}
 		if (in_r) {
-			if (cl) g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
-			if (cl && !g_app_state.editor_active && g_app_state.diff_is_summary &&
-				m.row > dtop && m.row < g_app_state.rows - 1) {
-				int t = g_app_state.diff_scroll + (m.row - (dtop + 1));
+			if (cl) g_app_state.focus = right_pane_focus_pane();
+			int diff_top = diff_content_start_row(dtop);
+			if (cl && !right_pane_is_editor_content() && g_app_state.diff_is_summary &&
+				m.row >= diff_top && m.row < g_app_state.rows - 1) {
+				int t = g_app_state.diff_scroll + (m.row - diff_top);
 				if (t >= 0 && t < g_app_state.diff_count) {
 					g_app_state.diff_sel = t;
 					open_diff_summary_at(t);
@@ -833,14 +864,16 @@ static void handle_mouse(MouseEvt m) {
 			if (m.col == x + g_app_state.col_author_w) g_app_state.dragging_col_author = true;
 			x += g_app_state.col_author_w + 1;
 			if (m.col == x + g_app_state.col_date_w) g_app_state.dragging_col_date = true;
-		} else if (!g_app_state.editor_active && g_app_state.diff_is_summary &&
-				   m.row > ct + g_app_state.layout_height_log && m.row < g_app_state.rows - 1) {
-			int t = g_app_state.diff_scroll +
-					(m.row - (ct + g_app_state.layout_height_log + 1));
-			if (t >= 0 && t < g_app_state.diff_count) {
-				g_app_state.diff_sel = t;
-				g_app_state.focus = FOCUS_DIFF;
-				open_diff_summary_at(t);
+		} else if (!right_pane_is_editor_content() && g_app_state.diff_is_summary &&
+				   m.row < g_app_state.rows - 1) {
+			int diff_top = diff_content_start_row(ct + g_app_state.layout_height_log);
+			if (m.row >= diff_top) {
+				int t = g_app_state.diff_scroll + (m.row - diff_top);
+				if (t >= 0 && t < g_app_state.diff_count) {
+					g_app_state.diff_sel = t;
+					focus_diff_pane();
+					open_diff_summary_at(t);
+				}
 			}
 		}
 	} else if (cl && g_app_state.current_view == VIEW_BRANCHES) {
@@ -882,8 +915,8 @@ static void handle_mouse(MouseEvt m) {
 				}
 			}
 		} else {
-			g_app_state.focus = FOCUS_EDITOR;
-			if (g_app_state.tab_count > 0) {
+			if (right_pane_is_editor_content()) {
+				g_app_state.focus = FOCUS_EDITOR;
 				Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 				int ty = ed->scroll_row + (m.row - (ct + 2));
 				if (ty >= 0 && ty < ed->line_count) {
@@ -893,6 +926,49 @@ static void handle_mouse(MouseEvt m) {
 							   (int)strlen(ed->lines[ty]));
 					ed->needs_sync = true;
 				}
+			} else {
+				focus_diff_pane();
+				int sc_x = g_app_state.render_x + g_app_state.render_width - 3;
+				if (m.col >= sc_x && g_app_state.scrollbar_height > 0 &&
+					m.row >= g_app_state.scrollbar_y &&
+					m.row < g_app_state.scrollbar_y + g_app_state.scrollbar_height) {
+					g_app_state.dragging_sc = true;
+					int rel_y = m.row - g_app_state.scrollbar_y;
+					int bh = imax(1, (g_app_state.scrollbar_visible * g_app_state.scrollbar_visible) /
+									 g_app_state.scrollbar_total);
+					int max_bpos = g_app_state.scrollbar_height - bh;
+					int bpos =
+						(max_bpos > 0)
+							? ((long long)g_app_state.diff_scroll * max_bpos) /
+								  (g_app_state.scrollbar_total - g_app_state.scrollbar_visible)
+							: 0;
+					if (rel_y >= bpos && rel_y < bpos + bh) {
+						g_app_state.scrollbar_drag_offset = rel_y - bpos;
+					} else {
+						g_app_state.scrollbar_drag_offset = bh / 2;
+						int new_bpos = iclamp(rel_y - g_app_state.scrollbar_drag_offset, 0, max_bpos);
+						g_app_state.diff_scroll =
+							(new_bpos * (g_app_state.scrollbar_total - g_app_state.scrollbar_visible)) /
+							max_bpos;
+					}
+					return;
+				}
+
+				int diff_top = diff_content_start_row(ct);
+				if (g_app_state.diff_is_summary && m.row >= diff_top && m.row < g_app_state.rows - 1) {
+					int t = g_app_state.diff_scroll + (m.row - diff_top);
+					if (t >= 0 && t < g_app_state.diff_count) {
+						g_app_state.diff_sel = t;
+						open_diff_summary_at(t);
+						return;
+					}
+				}
+
+				g_app_state.selecting = true;
+				g_app_state.sel_start_y = g_app_state.sel_end_y =
+					g_app_state.diff_scroll + (m.row - diff_top);
+				g_app_state.sel_start_x = g_app_state.sel_end_x =
+					m.col - g_app_state.render_x - 1;
 			}
 		}
 	}
@@ -984,22 +1060,30 @@ void handle_key(Key k) {
 	}
 
 	if (k.type == KEY_CTRL_F) {
-		if (g_app_state.focus == FOCUS_EDITOR)
+		if (g_app_state.focus == FOCUS_EDITOR && !editor_current_tab_is_diff())
 			prompt_start(UI->prompt_find, editor_find, false);
 		else
 			action_pull();
 		return;
 	}
 	if (k.type == KEY_CTRL_G) {
-		if (g_app_state.focus == FOCUS_EDITOR)
+		if (g_app_state.focus == FOCUS_EDITOR && !editor_current_tab_is_diff())
 			prompt_start(UI->prompt_go_to_line, editor_goto_line, false);
 		return;
 	}
 	if (k.type == KEY_CTRL_S) {
-		if (g_app_state.focus == FOCUS_EDITOR)
+		if (g_app_state.focus == FOCUS_EDITOR && !editor_current_tab_is_diff())
 			editor_save();
 		else if (g_app_state.current_view == VIEW_STATUS && g_app_state.focus == FOCUS_CHANGES)
 			action_stage();
+		return;
+	}
+	if ((k.type == KEY_F1 || k.type == KEY_F2) &&
+		(g_app_state.editor_active || g_app_state.current_view == VIEW_EDITOR)) {
+		if (k.type == KEY_F1)
+			editor_prev_tab();
+		else
+			editor_next_tab();
 		return;
 	}
 
@@ -1055,7 +1139,9 @@ void handle_key(Key k) {
 		if (!(k.type == KEY_CHAR && isdigit((unsigned char)k.ch))) return;
 	}
 
-	if (g_app_state.focus == FOCUS_EDITOR && k.type != KEY_TAB && k.type != KEY_SHIFT_TAB) {
+	if (g_app_state.focus == FOCUS_EDITOR && g_app_state.tab_count > 0 &&
+		!editor_current_tab_is_diff() &&
+		k.type != KEY_TAB && k.type != KEY_SHIFT_TAB) {
 		handle_editor_key(k);
 		return;
 	}
@@ -1186,7 +1272,8 @@ void handle_key(Key k) {
 				return;
 			case 'V': {
 				const char *path = NULL;
-				if (g_app_state.focus == FOCUS_EDITOR && g_app_state.tab_count > 0)
+				if (g_app_state.focus == FOCUS_EDITOR && g_app_state.tab_count > 0 &&
+					!editor_current_tab_is_diff())
 					path = g_app_state.tabs[g_app_state.tab_current].path;
 				else if (g_app_state.focus == FOCUS_CHANGES && g_app_state.file_count > 0)
 					path = g_app_state.files[g_app_state.file_sel].path;
@@ -1240,14 +1327,15 @@ void handle_key(Key k) {
 
 	if (k.type == KEY_TAB) {
 		if (g_app_state.current_view == VIEW_STATUS) {
+			FocusPane right_focus = right_pane_focus_pane();
 			if (g_app_state.focus == FOCUS_CHANGES)
 				g_app_state.focus = FOCUS_GRAPH;
 			else if (g_app_state.focus == FOCUS_GRAPH)
-				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+				g_app_state.focus = right_focus;
 			else if (g_app_state.focus == FOCUS_DIFF || g_app_state.focus == FOCUS_EDITOR)
 				g_app_state.focus = g_app_state.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
 			else if (g_app_state.focus == FOCUS_BROWSER)
-				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+				g_app_state.focus = right_focus;
 		} else {
 			g_app_state.current_view = (View)((g_app_state.current_view + 1) % VIEW_COUNT);
 		}
@@ -1255,14 +1343,15 @@ void handle_key(Key k) {
 	}
 	if (k.type == KEY_SHIFT_TAB) {
 		if (g_app_state.current_view == VIEW_STATUS) {
+			FocusPane right_focus = right_pane_focus_pane();
 			if (g_app_state.focus == FOCUS_CHANGES)
-				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+				g_app_state.focus = right_focus;
 			else if (g_app_state.focus == FOCUS_GRAPH)
 				g_app_state.focus = g_app_state.browser_active ? FOCUS_BROWSER : FOCUS_CHANGES;
 			else if (g_app_state.focus == FOCUS_DIFF || g_app_state.focus == FOCUS_EDITOR)
 				g_app_state.focus = FOCUS_GRAPH;
 			else if (g_app_state.focus == FOCUS_BROWSER)
-				g_app_state.focus = g_app_state.editor_active ? FOCUS_EDITOR : FOCUS_DIFF;
+				g_app_state.focus = right_focus;
 		} else {
 			g_app_state.current_view =
 				(View)((g_app_state.current_view + VIEW_COUNT - 1) % VIEW_COUNT);
@@ -1283,7 +1372,7 @@ void handle_key(Key k) {
 			if (g_app_state.focus == FOCUS_CHANGES)
 				g_app_state.focus = FOCUS_GRAPH;
 			else if (g_app_state.focus == FOCUS_GRAPH)
-				g_app_state.focus = FOCUS_DIFF;
+				g_app_state.focus = right_pane_focus_pane();
 			return;
 		}
 	}
@@ -1329,11 +1418,11 @@ void handle_key(Key k) {
 				} else if (k.ch == '>') {
 					toggle_commit_expansion();
 				} else if (k.ch == '=') {
-					g_app_state.focus = FOCUS_DIFF;
+					focus_diff_pane();
 				}
 				break;
 			case KEY_ENTER:
-				g_app_state.focus = FOCUS_DIFF;
+				focus_diff_pane();
 				break;
 			default:
 				break;
@@ -1430,7 +1519,7 @@ void handle_key(Key k) {
 					g_app_state.diff_staged = false;
 					g_app_state.diff_is_summary = false;
 					sync_graph_preview();
-					g_app_state.focus = FOCUS_DIFF;
+					focus_diff_pane();
 				}
 				break;
 			default:

@@ -115,6 +115,7 @@ int main(int argc, char **argv) {
 	g_app_state.col_author_w = 14;
 	g_app_state.col_date_w = 13;
 	g_app_state.editor_active = editor_mode;
+	g_app_state.editor_diff_tab = false;
 	g_app_state.browser_active = false;
 	g_app_state.diff_sidebyside = true;
 	g_app_state.diff_continuous = false;
