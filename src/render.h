@@ -15,6 +15,21 @@ typedef struct {
 	Color fg_graph[6];
 	Color fg_ref_local, fg_ref_remote, fg_ref_tag;
 	Color fg_ok, fg_err, fg_linenum;
+	/* Syntax highlighting colors (VSCode-style) */
+	Color syn_keyword;      /* Control flow keywords (if, for, return, etc.) */
+	Color syn_storage;      /* Storage types (int, char, struct, etc.) */
+	Color syn_string;       /* String literals */
+	Color syn_comment;      /* Comments */
+	Color syn_number;       /* Numeric literals */
+	Color syn_function;     /* Function names */
+	Color syn_type;         /* Type names/classes */
+	Color syn_variable;     /* Variables/parameters */
+	Color syn_operator;     /* Operators */
+	Color syn_preproc;      /* Preprocessor directives (#include, etc.) */
+	Color syn_constant;     /* Constants (NULL, true, false, etc.) */
+	Color syn_tag;          /* HTML/XML tags */
+	Color syn_attribute;    /* HTML/XML attributes */
+	Color syn_decorator;    /* Python decorators, annotations */
 } Theme;
 
 /* Built-in theme count */

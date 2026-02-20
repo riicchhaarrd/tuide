@@ -12,4 +12,7 @@ void draw_editor(int top, int render_x, int render_width, int h);
 void draw_browser(int top, int h);
 void draw_editor_tabs_row(int row, int render_x, int render_width);
 
+/* Syntax highlighting support */
+void diff_set_language(const char *filepath);
+
 #endif

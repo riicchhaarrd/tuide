@@ -48,7 +48,22 @@ static const Theme TH_DARK = {"Dark+ (VSCode)",
 							  {220, 220, 170},
 							  {78, 201, 176},
 							  {244, 71, 71},
-							  {90, 90, 90}};
+							  {90, 90, 90},
+							  /* Syntax highlighting colors */
+							  {197, 134, 192},  /* syn_keyword - purple/pink (control flow) */
+							  {86, 156, 214},   /* syn_storage - blue (types) */
+							  {206, 145, 120},  /* syn_string - orange */
+							  {106, 153, 85},   /* syn_comment - green */
+							  {181, 206, 168},  /* syn_number - light green */
+							  {220, 220, 170},  /* syn_function - yellow */
+							  {78, 201, 176},   /* syn_type - teal */
+							  {212, 212, 212},  /* syn_variable - white/light gray */
+							  {212, 212, 212},  /* syn_operator - white */
+							  {86, 156, 214},   /* syn_preproc - blue */
+							  {86, 156, 214},   /* syn_constant - blue */
+							  {86, 156, 214},   /* syn_tag - blue */
+							  {206, 145, 120},  /* syn_attribute - orange */
+							  {197, 134, 192}}; /* syn_decorator - purple */
 
 /* Visual Studio Community Light Blue C++ */
 static const Theme TH_VSLIGHT = {
@@ -83,7 +98,22 @@ static const Theme TH_VSLIGHT = {
 	{140, 90, 0},
 	{0, 100, 0},
 	{180, 0, 0},
-	{160, 160, 170}};
+	{160, 160, 170},
+	/* Syntax highlighting colors */
+	{0, 0, 160},        /* syn_keyword - dark blue (control flow) */
+	{0, 0, 255},        /* syn_storage - bright blue (types) */
+	{163, 21, 21},      /* syn_string - red */
+	{0, 128, 0},        /* syn_comment - green */
+	{0, 0, 0},          /* syn_number - black */
+	{0, 0, 255},        /* syn_function - blue */
+	{0, 80, 170},       /* syn_type - dark blue */
+	{30, 30, 30},       /* syn_variable - dark gray */
+	{30, 30, 30},       /* syn_operator - dark gray */
+	{128, 0, 128},      /* syn_preproc - purple */
+	{0, 0, 255},        /* syn_constant - blue */
+	{128, 0, 128},      /* syn_tag - purple */
+	{163, 21, 21},      /* syn_attribute - red */
+	{128, 0, 128}};     /* syn_decorator - purple */
 
 /* Solarized Dark */
 static const Theme TH_SOL = {
@@ -118,7 +148,22 @@ static const Theme TH_SOL = {
 	{181, 137, 0},
 	{133, 153, 0},
 	{220, 50, 47},
-	{60, 80, 85}};
+	{60, 80, 85},
+	/* Syntax highlighting colors */
+	{211, 54, 130},     /* syn_keyword - magenta (control flow) */
+	{38, 139, 210},     /* syn_storage - blue (types) */
+	{42, 161, 152},     /* syn_string - cyan */
+	{88, 110, 117},     /* syn_comment - base1 (gray) */
+	{133, 153, 0},      /* syn_number - green */
+	{181, 137, 0},      /* syn_function - yellow */
+	{42, 161, 152},     /* syn_type - cyan */
+	{131, 148, 150},    /* syn_variable - base0 (light gray) */
+	{181, 137, 0},      /* syn_operator - yellow */
+	{203, 75, 22},      /* syn_preproc - orange */
+	{220, 50, 47},      /* syn_constant - red */
+	{38, 139, 210},     /* syn_tag - blue */
+	{181, 137, 0},      /* syn_attribute - yellow */
+	{211, 54, 130}};    /* syn_decorator - magenta */
 
 /* One Dark */
 static const Theme TH_ONEDARK = {"One Dark",
@@ -157,7 +202,22 @@ static const Theme TH_ONEDARK = {"One Dark",
 								 {209, 154, 102},
 								 {152, 195, 121},
 								 {224, 108, 117},
-								 {92, 99, 112}};
+								 {92, 99, 112},
+								 /* Syntax highlighting colors */
+								 {198, 120, 221},    /* syn_keyword - purple (control flow) */
+								 {229, 192, 123},    /* syn_storage - yellow (types) */
+								 {152, 195, 121},    /* syn_string - green */
+								 {92, 99, 112},      /* syn_comment - gray */
+								 {209, 154, 102},    /* syn_number - orange */
+								 {97, 175, 239},     /* syn_function - blue */
+								 {229, 192, 123},    /* syn_type - yellow */
+								 {171, 178, 191},    /* syn_variable - light gray */
+								 {171, 178, 191},    /* syn_operator - light gray */
+								 {97, 175, 239},     /* syn_preproc - blue */
+								 {209, 154, 102},    /* syn_constant - orange */
+								 {224, 108, 117},    /* syn_tag - red */
+								 {209, 154, 102},    /* syn_attribute - orange */
+								 {198, 120, 221}};   /* syn_decorator - purple */
 
 /* Dynamic theme array and count */
 Theme *THEMES[16] = {NULL};
@@ -264,6 +324,22 @@ bool theme_load_custom(const char *path) {
 	theme->fg_ok = configcolor_to_color(cfg_theme.fg_ok);
 	theme->fg_err = configcolor_to_color(cfg_theme.fg_err);
 	theme->fg_linenum = configcolor_to_color(cfg_theme.fg_linenum);
+
+	/* Syntax highlighting colors */
+	theme->syn_keyword = configcolor_to_color(cfg_theme.syn_keyword);
+	theme->syn_storage = configcolor_to_color(cfg_theme.syn_storage);
+	theme->syn_string = configcolor_to_color(cfg_theme.syn_string);
+	theme->syn_comment = configcolor_to_color(cfg_theme.syn_comment);
+	theme->syn_number = configcolor_to_color(cfg_theme.syn_number);
+	theme->syn_function = configcolor_to_color(cfg_theme.syn_function);
+	theme->syn_type = configcolor_to_color(cfg_theme.syn_type);
+	theme->syn_variable = configcolor_to_color(cfg_theme.syn_variable);
+	theme->syn_operator = configcolor_to_color(cfg_theme.syn_operator);
+	theme->syn_preproc = configcolor_to_color(cfg_theme.syn_preproc);
+	theme->syn_constant = configcolor_to_color(cfg_theme.syn_constant);
+	theme->syn_tag = configcolor_to_color(cfg_theme.syn_tag);
+	theme->syn_attribute = configcolor_to_color(cfg_theme.syn_attribute);
+	theme->syn_decorator = configcolor_to_color(cfg_theme.syn_decorator);
 
 	/* Add to themes array */
 	if (NTHEMES < 16) {

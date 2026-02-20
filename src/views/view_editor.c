@@ -6,6 +6,7 @@
 #include "../render.h"
 #include "../state.h"
 #include "../strings.h"
+#include "../syntax.h"
 #include "../util.h"
 #include "../views.h"
 
@@ -177,6 +178,8 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 	}
 
 	int vis_w = render_width - 10;
+	LangType lang = syntax_detect_language(t->path);
+
 	for (int i = ed->scroll_row; i < ed->line_count && row < lim - 1; i++, row++) {
 		at(row, render_x + 1);
 		cfg(TH->fg_linenum);
@@ -189,91 +192,67 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 		char *full_line = ed->lines[i];
 		int full_len = (int)strlen(full_line);
 
-		char line_buf[1024];
+		/* Tokenize the line for syntax highlighting */
+		Token tokens[256];
+		int token_count = syntax_tokenize_line(full_line, full_len, lang,
+		                                        tokens, 256);
+
+		/* Determine the visible portion and apply syntax highlighting */
 		int start = ed->scroll_col;
-		int len = 0;
-		if (start < full_len) {
-			len = imin(full_len - start, 1023);
-			len = imin(len, vis_w);
-			memcpy(line_buf, full_line + start, len);
+		int end = imin(full_len, start + vis_w);
+		if (end <= start) {
+			end = start;
 		}
-		line_buf[len] = '\0';
 
-		const char *ext = strrchr(t->path, '.');
 		int cur_c = render_x + 7;
-		int j = 0;
-		while (j < len && cur_c < render_x + render_width - 3) {
-			// int real_j = j + start;
-			char c = line_buf[j];
+		int pos = start;
+		int tok_idx = 0;
 
-			if ((c == '/' && j + 1 < len && line_buf[j + 1] == '/') ||
-				(c == '#' && (ext && strcmp(ext, ".py") == 0))) {
-				cfg(TH->fg_accent3);
-				while (j < len && cur_c < render_x + render_width - 3) {
-					if (is_ed_selected(i, j + start))
-						cbg(TH->bg_sel);
-					else
-						cbg(TH->bg_base);
-					char cs[2] = {line_buf[j++], 0};
-					put_cell(row, cur_c++, cs);
+		while (pos < end && cur_c < render_x + render_width - 3) {
+			/* Find current token */
+			Color col = TH->fg_normal;
+			bool in_token = false;
+
+			while (tok_idx < token_count) {
+				Token *tok = &tokens[tok_idx];
+				if (tok->start <= pos && pos < tok->end) {
+					col = syntax_token_color(tok->type, lang);
+					in_token = true;
+					break;
+				} else if (tok->start >= pos) {
+					break;
 				}
-				break;
+				tok_idx++;
 			}
 
-			if (c == '"' || c == '\'') {
-				char quote = c;
-				cfg(TH->fg_unstaged);
-				if (is_ed_selected(i, j + start))
-					cbg(TH->bg_sel);
-				else
-					cbg(TH->bg_base);
-				char cs[2] = {line_buf[j++], 0};
-				put_cell(row, cur_c++, cs);
-				while (j < len && cur_c < render_x + render_width - 3) {
-					if (is_ed_selected(i, j + start))
-						cbg(TH->bg_sel);
-					else
-						cbg(TH->bg_base);
-					char sc = line_buf[j++];
-					char scs[2] = {sc, 0};
-					put_cell(row, cur_c++, scs);
-					if (sc == quote && (j < 2 || line_buf[j - 2] != '\\')) break;
-				}
-				continue;
+			/* Check if we're at a token boundary */
+			if (tok_idx < token_count && pos == tokens[tok_idx].start) {
+				col = syntax_token_color(tokens[tok_idx].type, lang);
+				in_token = true;
 			}
 
-			if (isalnum((unsigned char)c) || c == '_' || c == '#') {
-				char buf[256];
-				int bi = 0;
-				int tok_start = j;
-				while (j < len &&
-					   (isalnum((unsigned char)line_buf[j]) || line_buf[j] == '_' ||
-						line_buf[j] == '#') &&
-					   bi < 255) {
-					buf[bi++] = line_buf[j++];
-				}
-				buf[bi] = '\0';
-				Color tcol = get_token_color(buf, false, ext);
-				for (int k = 0; k < bi; k++) {
-					if (cur_c >= render_x + render_width - 3) break;
-					if (is_ed_selected(i, tok_start + k + start))
-						cbg(TH->bg_sel);
-					else
-						cbg(TH->bg_base);
-					cfg(tcol);
-					char tcs[2] = {buf[k], 0};
-					put_cell(row, cur_c++, tcs);
-				}
-				continue;
-			}
+			/* Apply color */
+			cfg(col);
 
-			if (is_ed_selected(i, j + start))
+			if (is_ed_selected(i, pos))
 				cbg(TH->bg_sel);
 			else
 				cbg(TH->bg_base);
-			cfg(ispunct((unsigned char)c) ? TH->fg_dim : TH->fg_normal);
-			char pcs[2] = {line_buf[j++], 0};
-			put_cell(row, cur_c++, pcs);
+
+			char cs[2] = {full_line[pos], 0};
+			put_cell(row, cur_c++, cs);
+			pos++;
+		}
+
+		/* Fill rest with spaces */
+		while (cur_c < render_x + render_width - 3) {
+			if (is_ed_selected(i, pos))
+				cbg(TH->bg_sel);
+			else
+				cbg(TH->bg_base);
+			cfg(TH->fg_normal);
+			put_cell(row, cur_c++, " ");
+			pos++;
 		}
 
 		if (i == ed->cursor_row) {

@@ -6,8 +6,71 @@
 #include "../render.h"
 #include "../state.h"
 #include "../strings.h"
+#include "../syntax.h"
 #include "../util.h"
 #include "../views.h"
+
+/* For storing the current diff file's language for syntax highlighting */
+static LangType current_diff_lang = LANG_NONE;
+
+/* Set the language for the current diff based on file path */
+void diff_set_language(const char *filepath) {
+	current_diff_lang = syntax_detect_language(filepath);
+}
+
+/* Helper: draw text with syntax highlighting and specific background */
+static void draw_text_with_syntax(const char *text, int text_len, int max_width,
+                                   int row, int start_col, Color bg_color,
+                                   int diff_idx, int pane_rx) {
+	if (!text || text_len <= 0 || max_width <= 0) return;
+
+	/* Tokenize the line */
+	Token tokens[256];
+	int token_count = syntax_tokenize_line(text, text_len, current_diff_lang,
+	                                        tokens, 256);
+
+	int pos = 0;
+	int col = start_col;
+	int tok_idx = 0;
+
+	while (pos < text_len && col < start_col + max_width) {
+		/* Find current token */
+		Color fg = TH->fg_normal;
+		bool in_token = false;
+
+		while (tok_idx < token_count) {
+			Token *tok = &tokens[tok_idx];
+			if (tok->start <= pos && pos < tok->end) {
+				fg = syntax_token_color(tok->type, current_diff_lang);
+				in_token = true;
+				break;
+			} else if (tok->start >= pos) {
+				break;
+			}
+			tok_idx++;
+		}
+
+		/* Check if we're at a token boundary */
+		if (tok_idx < token_count && pos == tokens[tok_idx].start) {
+			fg = syntax_token_color(tokens[tok_idx].type, current_diff_lang);
+			in_token = true;
+		}
+
+		cfg(fg);
+		cbg(bg_color);
+
+		char cs[2] = {text[pos], 0};
+		put_cell(row, col++, cs);
+		pos++;
+	}
+
+	/* Fill remaining with background */
+	while (col < start_col + max_width) {
+		cfg(TH->fg_normal);
+		cbg(bg_color);
+		put_cell(row, col++, " ");
+	}
+}
 
 static int diff_wrap_rows(int text_len, int code_w) {
 	if (!g_app_state.diff_wrap || code_w <= 0 || text_len <= code_w) return 1;
@@ -169,13 +232,20 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 						}
 						cfg(TH->fg_dim);
 						ppad_ext(" ", 1, di, render_x);
-						cfg(TH->fg_diff_ctx);
+						/* Use syntax highlighting for context */
 						if (wrap_this > 0) {
-							memcpy(tmp, text + wrap_offset, wrap_this);
-							tmp[wrap_this] = '\0';
-							ppad_ext(tmp, code_w, di, render_x);
-						} else
-							ppad_ext("", code_w, di, render_x);
+							int content_col = render_x + 3 + lnum_w + 1;
+							draw_text_with_syntax(text + wrap_offset, wrap_this, code_w,
+							                     row, content_col, TH->bg_base, di, render_x);
+						} else {
+							/* Fill with spaces */
+							int content_col = render_x + 3 + lnum_w + 1;
+							for (int k = 0; k < code_w; k++) {
+								cbg(TH->bg_base);
+								cfg(TH->fg_normal);
+								put_cell(row, content_col + k, " ");
+							}
+						}
 						break;
 					case 1: /* Added */
 						cbg(bg_line);
@@ -198,14 +268,20 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 						}
 						cfg(fg_gutter);
 						ppad_ext("+", 1, di, render_x);
-						cfg(TH->fg_diff_add);
-						g_app_state.cur_bold = true;
+						/* Use syntax highlighting for added lines */
 						if (wrap_this > 0) {
-							memcpy(tmp, text + wrap_offset, wrap_this);
-							tmp[wrap_this] = '\0';
-							ppad_ext(tmp, code_w, di, render_x);
-						} else
-							ppad_ext("", code_w, di, render_x);
+							int content_col = render_x + 3 + lnum_w + 1;
+							draw_text_with_syntax(text + wrap_offset, wrap_this, code_w,
+							                     row, content_col, bg_line, di, render_x);
+						} else {
+							/* Fill with spaces */
+							int content_col = render_x + 3 + lnum_w + 1;
+							for (int k = 0; k < code_w; k++) {
+								cbg(bg_line);
+								cfg(TH->fg_normal);
+								put_cell(row, content_col + k, " ");
+							}
+						}
 						break;
 					case 2: /* Deleted */
 						cbg(bg_line);
@@ -228,14 +304,20 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 						}
 						cfg(fg_gutter);
 						ppad_ext("-", 1, di, render_x);
-						cfg(TH->fg_diff_del);
-						g_app_state.cur_bold = true;
+						/* Use syntax highlighting for deleted lines */
 						if (wrap_this > 0) {
-							memcpy(tmp, text + wrap_offset, wrap_this);
-							tmp[wrap_this] = '\0';
-							ppad_ext(tmp, code_w, di, render_x);
-						} else
-							ppad_ext("", code_w, di, render_x);
+							int content_col = render_x + 3 + lnum_w + 1;
+							draw_text_with_syntax(text + wrap_offset, wrap_this, code_w,
+							                     row, content_col, bg_line, di, render_x);
+						} else {
+							/* Fill with spaces */
+							int content_col = render_x + 3 + lnum_w + 1;
+							for (int k = 0; k < code_w; k++) {
+								cbg(bg_line);
+								cfg(TH->fg_normal);
+								put_cell(row, content_col + k, " ");
+							}
+						}
 						break;
 					case 3: { /* Hunk header */
 						cbg(bg_line);
@@ -406,12 +488,19 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 					}
 					cfg(TH->fg_dim);
 					ppad_ext("\xe2\x94\x82", 1, di, render_x);
-					cfg(TH->fg_diff_ctx);
+					/* Use syntax highlighting for left side */
 					if (wr < left_rows) {
-						diff_wrap_slice(dl->old_line, left_len, code_w_left, wr, tmp);
-						ppad_ext(tmp, code_w_left, di, render_x);
+						int left_content_len = diff_wrap_slice(dl->old_line, left_len, code_w_left, wr, tmp);
+						int content_col = render_x + 3 + lnum_w + 1;
+						draw_text_with_syntax(tmp, left_content_len, code_w_left,
+						                     row, content_col, TH->bg_base, di, render_x);
 					} else {
-						ppad_ext("", code_w_left, di, render_x);
+						int content_col = render_x + 3 + lnum_w + 1;
+						for (int k = 0; k < code_w_left; k++) {
+							cbg(TH->bg_base);
+							cfg(TH->fg_normal);
+							put_cell(row, content_col + k, " ");
+						}
 					}
 
 					at(row, render_x + half + 1);
@@ -430,12 +519,19 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 					}
 					cfg(TH->fg_dim);
 					ppad_ext("\xe2\x94\x82", 1, di, render_x);
-					cfg(TH->fg_diff_ctx);
+					/* Use syntax highlighting for right side */
 					if (wr < right_rows) {
-						diff_wrap_slice(dl->new_line, right_len, code_w_right, wr, tmp);
-						ppad_ext(tmp, code_w_right, di, render_x);
+						int right_content_len = diff_wrap_slice(dl->new_line, right_len, code_w_right, wr, tmp);
+						int content_col = render_x + half + 3 + lnum_w + 1;
+						draw_text_with_syntax(tmp, right_content_len, code_w_right,
+						                     row, content_col, TH->bg_base, di, render_x);
 					} else {
-						ppad_ext("", code_w_right, di, render_x);
+						int content_col = render_x + half + 3 + lnum_w + 1;
+						for (int k = 0; k < code_w_right; k++) {
+							cbg(TH->bg_base);
+							cfg(TH->fg_normal);
+							put_cell(row, content_col + k, " ");
+						}
 					}
 					rst();
 				}
@@ -486,13 +582,19 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 							}
 							cfg(TH->fg_err);
 							ppad_ext("-", 1, di + i, render_x);
-							cfg(TH->fg_diff_del);
-							g_app_state.cur_bold = true;
+							/* Use syntax highlighting for deleted lines */
 							if (wr < left_rows) {
-								diff_wrap_slice(od->old_line, left_len, code_w_left, wr, tmp);
-								ppad_ext(tmp, code_w_left, di + i, render_x);
+								int left_content_len = diff_wrap_slice(od->old_line, left_len, code_w_left, wr, tmp);
+								int content_col = render_x + 3 + lnum_w + 1;
+								draw_text_with_syntax(tmp, left_content_len, code_w_left,
+								                     row, content_col, TH->bg_diff_del, di + i, render_x);
 							} else {
-								ppad_ext("", code_w_left, di + i, render_x);
+								int content_col = render_x + 3 + lnum_w + 1;
+								for (int k = 0; k < code_w_left; k++) {
+									cbg(TH->bg_diff_del);
+									cfg(TH->fg_normal);
+									put_cell(row, content_col + k, " ");
+								}
 							}
 						} else {
 							cbg(TH->bg_panel);
@@ -524,13 +626,19 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 							}
 							cfg(TH->fg_ok);
 							ppad_ext("+", 1, di + ndel + i, render_x);
-							cfg(TH->fg_diff_add);
-							g_app_state.cur_bold = true;
+							/* Use syntax highlighting for added lines */
 							if (wr < right_rows) {
-								diff_wrap_slice(nd->new_line, right_len, code_w_right, wr, tmp);
-								ppad_ext(tmp, code_w_right, di + ndel + i, render_x);
+								int right_content_len = diff_wrap_slice(nd->new_line, right_len, code_w_right, wr, tmp);
+								int content_col = render_x + half + 3 + lnum_w + 1;
+								draw_text_with_syntax(tmp, right_content_len, code_w_right,
+								                     row, content_col, TH->bg_diff_add, di + ndel + i, render_x);
 							} else {
-								ppad_ext("", code_w_right, di + ndel + i, render_x);
+								int content_col = render_x + half + 3 + lnum_w + 1;
+								for (int k = 0; k < code_w_right; k++) {
+									cbg(TH->bg_diff_add);
+									cfg(TH->fg_normal);
+									put_cell(row, content_col + k, " ");
+								}
 							}
 						} else {
 							cbg(TH->bg_panel);

@@ -21,6 +21,11 @@ typedef struct {
     ConfigColor fg_graph[6];
     ConfigColor fg_ref_local, fg_ref_remote, fg_ref_tag;
     ConfigColor fg_ok, fg_err, fg_linenum;
+    /* Syntax highlighting colors */
+    ConfigColor syn_keyword, syn_storage, syn_string, syn_comment;
+    ConfigColor syn_number, syn_function, syn_type, syn_variable;
+    ConfigColor syn_operator, syn_preproc, syn_constant;
+    ConfigColor syn_tag, syn_attribute, syn_decorator;
 } ConfigTheme;
 
 /* General configuration settings */

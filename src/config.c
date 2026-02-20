@@ -202,6 +202,27 @@ bool config_parse_theme(const char *path, ConfigTheme *theme) {
                 snprintf(c->name, sizeof(c->name), "%s", key);
                 config_parse_color(value, &c->r, &c->g, &c->b);
             }
+        } else if (strcmp(section, "syntax") == 0) {
+            ConfigColor *c = NULL;
+            if (strcmp(key, "keyword") == 0) c = &theme->syn_keyword;
+            else if (strcmp(key, "storage") == 0) c = &theme->syn_storage;
+            else if (strcmp(key, "string") == 0) c = &theme->syn_string;
+            else if (strcmp(key, "comment") == 0) c = &theme->syn_comment;
+            else if (strcmp(key, "number") == 0) c = &theme->syn_number;
+            else if (strcmp(key, "function") == 0) c = &theme->syn_function;
+            else if (strcmp(key, "type") == 0) c = &theme->syn_type;
+            else if (strcmp(key, "variable") == 0) c = &theme->syn_variable;
+            else if (strcmp(key, "operator") == 0) c = &theme->syn_operator;
+            else if (strcmp(key, "preproc") == 0) c = &theme->syn_preproc;
+            else if (strcmp(key, "constant") == 0) c = &theme->syn_constant;
+            else if (strcmp(key, "tag") == 0) c = &theme->syn_tag;
+            else if (strcmp(key, "attribute") == 0) c = &theme->syn_attribute;
+            else if (strcmp(key, "decorator") == 0) c = &theme->syn_decorator;
+
+            if (c) {
+                snprintf(c->name, sizeof(c->name), "%s", key);
+                config_parse_color(value, &c->r, &c->g, &c->b);
+            }
         }
     }
 

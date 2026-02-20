@@ -13,6 +13,7 @@
 #include "strings.h"
 #include "ui.h"
 #include "util.h"
+#include "views.h"
 
 char *git_run(const char *cmd) {
 	FILE *fp = popen(cmd, "r");
@@ -497,6 +498,7 @@ void update_diff(void) {
 		GitFile *f = &g_app_state.files[g_app_state.file_sel];
 		snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "%s", f->path);
 		g_app_state.diff_staged = f->staged;
+		diff_set_language(f->path);  /* Set syntax highlighting language */
 		load_diff_file(f->path, f->staged);
 	}
 }
@@ -550,6 +552,7 @@ void sync_graph_preview(void) {
 				 c->hash, fpath);
 		g_app_state.diff_is_summary = false;
 		snprintf(g_app_state.diff_commit, sizeof(g_app_state.diff_commit), "%s", c->hash);
+		diff_set_language(fpath);  /* Set syntax highlighting language */
 		parse_diff(o ? o : "");
 		free(o);
 	}
