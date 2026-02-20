@@ -820,11 +820,11 @@ void handle_editor_key(Key key_event) {
 				action_copy_editor_selection();
 				break;
 			}
-			if (key_event.ch == 'n') {
+			if (key_event.ch == 'n' && g_app_state.ed_search[0]) {
 				editor_find_next();
 				break;
 			}
-			if (key_event.ch == 'N') {
+			if (key_event.ch == 'N' && g_app_state.ed_search[0]) {
 				editor_find_prev();
 				break;
 			}
