@@ -10,6 +10,8 @@
 static void draw_commit_bar(int row, int w, int sx) {
 	bool focused = g_app_state.commit_bar_focused;
 	int iw = w - 2;
+	const char *commit_label = " \xe2\x9c\x93 Commit";
+	const char *amend_label = " \xe2\x86\xba Amend";
 
 	at(row, sx + 1);
 	cbg(TH->bg_header);
@@ -18,7 +20,8 @@ static void draw_commit_bar(int row, int w, int sx) {
 	ppad(" \xe2\x9c\x8d ", 3);
 	rst();
 
-	int field_w = iw - 3 - 14;
+	int btn_total_w = COMMIT_BTN_W + AMEND_BTN_W;
+	int field_w = iw - 3 - btn_total_w;
 	if (field_w < 4) field_w = 4;
 
 	int len = (int)strlen(g_app_state.commit_msg_buf);
@@ -72,13 +75,13 @@ static void draw_commit_bar(int row, int w, int sx) {
 	cbg(TH->fg_staged);
 	cfg(TH->bg_base);
 	g_app_state.cur_bold = true;
-	ppad(" Commit", 7);
+	ppad(commit_label, COMMIT_BTN_W);
 	rst();
-	at(row, btn_x + 7);
-	cbg(TH->bg_panel);
+	at(row, btn_x + COMMIT_BTN_W);
+	cbg(TH->bg_header);
 	cfg(TH->fg_accent2);
 	g_app_state.cur_bold = true;
-	ppad(" Amend ", 7);
+	ppad(amend_label, AMEND_BTN_W);
 	rst();
 }
 

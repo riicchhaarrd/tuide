@@ -14,6 +14,8 @@
 #define INPUT_MAX 512
 #define GRAPH_COLS 8
 #define MAX_UNDO 80
+#define COMMIT_BTN_W 9
+#define AMEND_BTN_W 8
 
 /* Clamping and min/max helpers */
 int iclamp(int v, int lo, int hi);

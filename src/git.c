@@ -535,6 +535,7 @@ void sync_graph_preview(void) {
 		snprintf(g_app_state.diff_title, sizeof(g_app_state.diff_title), "commit %s: %s", c->hash,
 				 c->subject);
 		g_app_state.diff_is_summary = false;
+		snprintf(g_app_state.diff_commit, sizeof(g_app_state.diff_commit), "%s", c->hash);
 		load_diff_commit(c->hash);
 	} else {
 		if (g_app_state.graph_file_sel >= c->file_count)

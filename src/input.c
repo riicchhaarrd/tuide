@@ -211,6 +211,27 @@ static void show_log_commit(void) {
 	load_diff_commit(c->hash);
 }
 
+static bool diff_is_commit_view(void) {
+	if (g_app_state.diff_commit[0]) return true;
+	return strncmp(g_app_state.diff_title, "commit ", 7) == 0;
+}
+
+static void refresh_diff_after_context_toggle(void) {
+	if (g_app_state.diff_is_summary) return;
+
+	if (g_app_state.current_view == VIEW_LOG) {
+		show_log_commit();
+		return;
+	}
+
+	if (g_app_state.current_view == VIEW_STATUS) {
+		if (diff_is_commit_view())
+			sync_graph_preview();
+		else
+			update_diff();
+	}
+}
+
 static void handle_mouse(MouseEvt m) {
 	g_app_state.last_mx = m.col;
 	g_app_state.last_my = m.row;
@@ -479,8 +500,7 @@ static void handle_mouse(MouseEvt m) {
 			}
 			if (m.col >= btn2_start && m.col < btn2_start + btn2_len) {
 				g_app_state.diff_continuous = !g_app_state.diff_continuous;
-				sync_graph_preview();
-				update_diff();
+				refresh_diff_after_context_toggle();
 				return;
 			}
 			if (m.col >= btn3_start && m.col < btn3_start + btn3_len) {
@@ -684,14 +704,16 @@ static void handle_mouse(MouseEvt m) {
 					if (m.row == commit_bar_row) {
 						int sx = g_app_state.sidebar_w + 1;
 						int iw = g_app_state.layout_width - 2;
-						int field_w = iw - 3 - 14;
+						int btn_total_w = COMMIT_BTN_W + AMEND_BTN_W;
+						int field_w = iw - 3 - btn_total_w;
 						if (field_w < 4) field_w = 4;
 						int btn_x = sx + 4 + field_w;
 
-						if (m.col >= btn_x && m.col < btn_x + 7) {
+						if (m.col >= btn_x && m.col < btn_x + COMMIT_BTN_W) {
 							g_app_state.commit_bar_focused = false;
 							do_commit_bar();
-						} else if (m.col >= btn_x + 7 && m.col < btn_x + 14) {
+						} else if (m.col >= btn_x + COMMIT_BTN_W &&
+								   m.col < btn_x + btn_total_w) {
 							g_app_state.commit_bar_focused = false;
 							do_amend_bar();
 						} else if (m.col >= sx + 4 && m.col < btn_x) {
@@ -1149,14 +1171,7 @@ void handle_key(Key k) {
 				return;
 			case 'H':
 				g_app_state.diff_continuous = !g_app_state.diff_continuous;
-				if (g_app_state.current_view == VIEW_STATUS) {
-					if (g_app_state.focus == FOCUS_GRAPH)
-						sync_graph_preview();
-					else
-						update_diff();
-				} else if (g_app_state.current_view == VIEW_LOG && g_app_state.commit_count > 0) {
-					load_diff_commit(g_app_state.commits[g_app_state.commit_sel].hash);
-				}
+				refresh_diff_after_context_toggle();
 				OK("Continuous Diff: %s",
 				   g_app_state.diff_continuous ? "ON (full context)" : "OFF (hunks only)");
 				return;
