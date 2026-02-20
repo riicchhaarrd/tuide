@@ -219,18 +219,18 @@ void draw_statusbar(void) {
 	if (g_app_state.current_view == VIEW_STATUS) {
 		if (g_app_state.focus == FOCUS_CHANGES)
 			hint =
-				"c:commit  SPC:stage  a:all  u:unstage  d:discard  e:edit  V:vi  g/G:top/bot  "
+				"c:commit  SPC:stage  a:all  u:unstage  d:discard  e:edit  V:editor  g/G:top/bot  "
 				"W:wrap  "
 				"T:theme";
 		else if (g_app_state.focus == FOCUS_GRAPH)
-			hint = "↑/↓:move  SPC/→:expand  ↵:diff  g/G:top/bot  V:vi  W:wrap  T:theme";
+			hint = "↑/↓:move  SPC/→:expand  ↵:diff  g/G:top/bot  V:editor  W:wrap  T:theme";
 		else if (g_app_state.focus == FOCUS_BROWSER)
 			hint = "↑/↓:move  ↵/→:open  ←:back  n:new  D:del  b:close";
 		else if (g_app_state.focus == FOCUS_EDITOR)
 			hint =
 				"Arrows:move  Shift+Arrows:select  n/N:find  Ctrl+F:search  Ctrl+Z:undo  "
 				"Ctrl+S:save  Ctrl+Q:quit  "
-				"V:vi";
+				"V:editor";
 		else
 			hint = "↑/↓:scroll  g/G:top/bot  s:split  W:wrap  q:back  T:theme";
 	} else if (g_app_state.current_view == VIEW_LOG)

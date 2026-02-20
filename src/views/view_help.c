@@ -59,6 +59,7 @@ void draw_help(int top, int h) {
 								 {"  P / Ctrl+P", "Push to remote"},
 								 {"  f / Ctrl+F", "Fetch + pull"},
 								 {"  s", "Stash working changes"},
+								 {"  V", "Open in $VISUAL/$EDITOR"},
 								 {"  R / Ctrl+R / Ctrl+L", "Full refresh"},
 								 {"  T", "Cycle theme"},
 								 {"  ?", "Toggle this help"},

@@ -27,13 +27,20 @@ static void msel(int *sel, int *scr, int cnt, int d, int vis, bool is_graph) {
 	}
 }
 
+static const char *resolve_external_editor(void) {
+	const char *ed = getenv("VISUAL");
+	if (ed && ed[0]) return ed;
+	ed = getenv("EDITOR");
+	if (ed && ed[0]) return ed;
+	ed = getenv("SELECTED_EDITOR");
+	if (ed && ed[0]) return ed;
+	return "vi";
+}
+
 /* Open current file/path in $VISUAL/$EDITOR/vi */
 static void action_open_in_editor_extern(const char *path) {
 	if (!path || !path[0]) return;
-	const char *ed = getenv("VISUAL");
-	if (!ed || !ed[0]) ed = getenv("SELECTED_EDITOR");
-	if (!ed || !ed[0]) ed = getenv("EDITOR");
-	if (!ed || !ed[0]) ed = "vi";
+	const char *ed = resolve_external_editor();
 
 	printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
 	fflush(stdout);
