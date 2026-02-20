@@ -129,7 +129,11 @@ void draw_tabbar(void) {
 	cbg(TH->bg_tab_inact);
 	cfg(TH->fg_accent2);
 	g_app_state.cur_bold = true;
-	ppad(UI->tabbar_title, 9);
+	int title_w = str_display_width(UI->tabbar_title);
+	int title_max = g_app_state.cols - 1;
+	if (title_max < 1) title_max = 1;
+	title_w = iclamp(title_w, 1, title_max);
+	ppad(UI->tabbar_title, title_w);
 	rst();
 	struct {
 		const char *n, *k;
@@ -139,7 +143,7 @@ void draw_tabbar(void) {
 				{UI->tab_branches, "3", VIEW_BRANCHES},
 				{UI->tab_stash, "4", VIEW_STASH},
 				{UI->tab_help, "?", VIEW_HELP}};
-	int cur_c = 10;
+	int cur_c = title_w + 1;
 	for (int i = 0; i < 5; i++) {
 		g_app_state.tab_x[i] = cur_c;
 		bool act = (tabs[i].v == g_app_state.current_view);
@@ -152,11 +156,12 @@ void draw_tabbar(void) {
 			cbg(TH->bg_tab_inact);
 			cfg(TH->fg_dim);
 		}
-		char tbuf[32];
+		char tbuf[64];
 		snprintf(tbuf, sizeof(tbuf), " %s[%s] ", tabs[i].n, tabs[i].k);
-		ppad(tbuf, (int)strlen(tbuf));
+		int tab_w = str_display_width(tbuf);
+		ppad(tbuf, tab_w);
 		rst();
-		cur_c += (int)strlen(tbuf);
+		cur_c += tab_w;
 		at(1, cur_c);
 		cbg(TH->bg_tab_inact);
 		cfg(TH->fg_dim);
@@ -168,7 +173,8 @@ void draw_tabbar(void) {
 	cbg(TH->bg_tab_inact);
 	cfg(TH->fg_accent3);
 	char rbuf[160];
-	int rlen = snprintf(rbuf, sizeof(rbuf), " ◈ %s  ⎇ %s ", TH->name, g_app_state.branch_name);
+	snprintf(rbuf, sizeof(rbuf), " ◈ %s  ⎇ %s ", TH->name, g_app_state.branch_name);
+	int rlen = str_display_width(rbuf);
 	int pad = g_app_state.cols - cur_c - rlen;
 	if (pad < 0) pad = 0;
 	for (int i = 0; i < pad; i++) put_cell(1, cur_c + i, " ");
@@ -276,7 +282,9 @@ void draw_cli(void) {
 		cbg(TH->bg_panel);
 		cfg(TH->fg_dim);
 	}
-	ppad(UI->cli_prompt, 3);
+	int prompt_w = str_display_width(UI->cli_prompt);
+	if (prompt_w < 1) prompt_w = 1;
+	ppad(UI->cli_prompt, prompt_w);
 	if (focused) {
 		cfg(TH->fg_bright);
 	} else {
@@ -284,16 +292,17 @@ void draw_cli(void) {
 	}
 
 	int len = (int)strlen(g_app_state.cli_buf);
-	at(row, 4);
+	int input_x = 1 + prompt_w;
+	at(row, input_x);
 	ppad(g_app_state.cli_buf, g_app_state.cli_cursor);
 
 	if (focused) {
-		at(row, 4 + g_app_state.cli_cursor);
+		at(row, input_x + g_app_state.cli_cursor);
 		cbg(TH->fg_accent1);
 		cfg(TH->bg_base);
 		char c = g_app_state.cli_buf[g_app_state.cli_cursor];
 		char cs[2] = {c ? c : ' ', 0};
-		put_cell(row, 4 + g_app_state.cli_cursor, cs);
+		put_cell(row, input_x + g_app_state.cli_cursor, cs);
 		rst();
 		if (focused)
 			cbg(TH->bg_sel);
@@ -302,12 +311,13 @@ void draw_cli(void) {
 		cfg(TH->fg_bright);
 	}
 
-	at(row, 4 + g_app_state.cli_cursor + (g_app_state.cli_buf[g_app_state.cli_cursor] ? 1 : 0));
+	at(row, input_x + g_app_state.cli_cursor +
+				 (g_app_state.cli_buf[g_app_state.cli_cursor] ? 1 : 0));
 	ppad(g_app_state.cli_buf + g_app_state.cli_cursor +
 			 (g_app_state.cli_buf[g_app_state.cli_cursor] ? 1 : 0),
 		 len - g_app_state.cli_cursor - (g_app_state.cli_buf[g_app_state.cli_cursor] ? 1 : 0));
 
-	int used = 3 + len;
+	int used = prompt_w + len;
 	at(row, 1 + used);
 	for (int i = used; i < g_app_state.cols; i++) put_cell(row, 1 + i, " ");
 	rst();
@@ -374,11 +384,11 @@ void draw_sidebar(void) {
 		cfg(TH->bg_panel);
 		cbg(TH->fg_accent1);
 		g_app_state.cur_bold = true;
-		ppad(UI->sidebar_browser_active, 10);
+		ppad(UI->sidebar_browser_active, g_app_state.sidebar_w);
 	} else {
 		cfg(TH->fg_dim);
 		cbg(TH->bg_panel);
-		ppad(UI->sidebar_browser_inactive, 10);
+		ppad(UI->sidebar_browser_inactive, g_app_state.sidebar_w);
 	}
 
 	at(top + 3, 1);
@@ -387,11 +397,11 @@ void draw_sidebar(void) {
 		cfg(TH->bg_panel);
 		cbg(TH->fg_accent1);
 		g_app_state.cur_bold = true;
-		ppad(UI->sidebar_git_active, 10);
+		ppad(UI->sidebar_git_active, g_app_state.sidebar_w);
 	} else {
 		cfg(TH->fg_dim);
 		cbg(TH->bg_panel);
-		ppad(UI->sidebar_git_inactive, 10);
+		ppad(UI->sidebar_git_inactive, g_app_state.sidebar_w);
 	}
 
 	rst();

@@ -24,6 +24,7 @@ int imax(int a, int b);
 
 /* String helpers */
 void strtrim(char *s);
+int str_display_width(const char *s);
 
 /* Clipboard helpers */
 void copy_to_sys_clipboard(const char *text);

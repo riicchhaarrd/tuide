@@ -53,9 +53,14 @@ void draw_diff(int top, int render_x, int render_width, int h) {
 	if (g_app_state.diff_scroll > maxsc) g_app_state.diff_scroll = maxsc;
 
 	if (!g_app_state.diff_count) {
-		at(row + vis / 2, render_x + render_width / 2 - 12);
+		int msg_w = str_display_width(UI->diff_empty_msg);
+		int max_w = render_width - 2;
+		if (max_w < 1) max_w = 1;
+		int draw_w = iclamp(msg_w, 1, max_w);
+		int msg_x = render_x + (render_width - draw_w) / 2;
+		at(row + vis / 2, msg_x);
 		cfg(TH->fg_dim);
-		ppad(UI->diff_empty_msg, 35);
+		ppad(UI->diff_empty_msg, draw_w);
 		rst();
 		return;
 	}

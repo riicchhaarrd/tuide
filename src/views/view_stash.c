@@ -17,9 +17,14 @@ void draw_stash(int top, int h) {
 	box_bot(top + h - 1, 1, w, true);
 	int row = top + 1, lim = top + h - 1;
 	if (!g_app_state.stash_count) {
-		at(row + 2, g_app_state.cols / 2 - 14);
+		int msg_w = str_display_width(UI->stash_empty_msg);
+		int max_w = w - 2;
+		if (max_w < 1) max_w = 1;
+		int draw_w = iclamp(msg_w, 1, max_w);
+		int msg_x = 1 + (w - draw_w) / 2;
+		at(row + 2, msg_x);
 		cfg(TH->fg_dim);
-		ppad(UI->stash_empty_msg, 38);
+		ppad(UI->stash_empty_msg, draw_w);
 		rst();
 		return;
 	}

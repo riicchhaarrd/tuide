@@ -77,9 +77,14 @@ void draw_editor(int top, int render_x, int render_width, int h) {
 				(g_app_state.focus == FOCUS_EDITOR), NULL);
 		box_sides(top, render_x, render_width, h, (g_app_state.focus == FOCUS_EDITOR));
 		box_fill(top, render_x, render_width, h, TH->bg_base);
-		at(top + h / 2, render_x + render_width / 2 - 10);
+		int msg_w = str_display_width(UI->editor_no_files);
+		int max_w = render_width - 2;
+		if (max_w < 1) max_w = 1;
+		int draw_w = iclamp(msg_w, 1, max_w);
+		int msg_x = render_x + (render_width - draw_w) / 2;
+		at(top + h / 2, msg_x);
 		cfg(TH->fg_dim);
-		ppad(UI->editor_no_files, 15);
+		ppad(UI->editor_no_files, draw_w);
 		box_bot(top + h - 1, render_x, render_width, (g_app_state.focus == FOCUS_EDITOR));
 		return;
 	}

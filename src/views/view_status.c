@@ -13,16 +13,20 @@ static void draw_commit_bar(int row, int w, int sx) {
 	int iw = w - 2;
 	const char *commit_label = UI->commit_button_label;
 	const char *amend_label = UI->amend_button_label;
+	int icon_w = str_display_width(UI->commit_bar_icon);
+	if (icon_w < 1) icon_w = 1;
+	int commit_w = imax(COMMIT_BTN_W, str_display_width(commit_label));
+	int amend_w = imax(AMEND_BTN_W, str_display_width(amend_label));
 
 	at(row, sx + 1);
 	cbg(TH->bg_header);
 	cfg(TH->fg_staged);
 	g_app_state.cur_bold = true;
-	ppad(UI->commit_bar_icon, 3);
+	ppad(UI->commit_bar_icon, icon_w);
 	rst();
 
-	int btn_total_w = COMMIT_BTN_W + AMEND_BTN_W;
-	int field_w = iw - 3 - btn_total_w;
+	int btn_total_w = commit_w + amend_w;
+	int field_w = iw - icon_w - btn_total_w;
 	if (field_w < 4) field_w = 4;
 
 	int len = (int)strlen(g_app_state.commit_msg_buf);
@@ -30,13 +34,14 @@ static void draw_commit_bar(int row, int w, int sx) {
 	if (g_app_state.commit_msg_cursor >= field_w)
 		disp_start = g_app_state.commit_msg_cursor - field_w + 1;
 
-	at(row, sx + 4);
+	int field_x = sx + 1 + icon_w;
+	at(row, field_x);
 	cbg(focused ? TH->bg_tab_act : TH->bg_panel);
 	cfg(focused ? TH->fg_bright : TH->fg_dim);
-	for (int i = 0; i < field_w; i++) put_cell(row, sx + 4 + i, " ");
+	for (int i = 0; i < field_w; i++) put_cell(row, field_x + i, " ");
 
 	for (int i = disp_start; i < len && (i - disp_start) < field_w; i++) {
-		int col = sx + 4 + (i - disp_start);
+		int col = field_x + (i - disp_start);
 		bool is_cursor = (focused && i == g_app_state.commit_msg_cursor);
 		if (is_cursor) {
 			cbg(TH->fg_accent1);
@@ -51,8 +56,8 @@ static void draw_commit_bar(int row, int w, int sx) {
 		put_cell(row, col, cs);
 	}
 	if (focused && g_app_state.commit_msg_cursor >= len) {
-		int col = sx + 4 + (len - disp_start);
-		if (col >= sx + 4 && col < sx + 4 + field_w) {
+		int col = field_x + (len - disp_start);
+		if (col >= field_x && col < field_x + field_w) {
 			cbg(TH->fg_accent1);
 			cfg(TH->bg_base);
 			g_app_state.cur_bold = true;
@@ -62,7 +67,7 @@ static void draw_commit_bar(int row, int w, int sx) {
 	rst();
 
 	if (!focused && len == 0) {
-		at(row, sx + 4);
+		at(row, field_x);
 		cbg(TH->bg_panel);
 		cfg(TH->fg_dim);
 		g_app_state.cur_italic = true;
@@ -71,18 +76,18 @@ static void draw_commit_bar(int row, int w, int sx) {
 		rst();
 	}
 
-	int btn_x = sx + 4 + field_w;
+	int btn_x = field_x + field_w;
 	at(row, btn_x);
 	cbg(TH->fg_staged);
 	cfg(TH->bg_base);
 	g_app_state.cur_bold = true;
-	ppad(commit_label, COMMIT_BTN_W);
+	ppad(commit_label, commit_w);
 	rst();
-	at(row, btn_x + COMMIT_BTN_W);
+	at(row, btn_x + commit_w);
 	cbg(TH->bg_header);
 	cfg(TH->fg_accent2);
 	g_app_state.cur_bold = true;
-	ppad(amend_label, AMEND_BTN_W);
+	ppad(amend_label, amend_w);
 	rst();
 }
 

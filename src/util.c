@@ -17,6 +17,33 @@ void strtrim(char *s) {
 	while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ')) s[--n] = '\0';
 }
 
+int str_display_width(const char *s) {
+	if (!s) return 0;
+	int w = 0;
+	while (*s) {
+		unsigned char c = (unsigned char)*s;
+		if (c == 0x1b) {
+			s++;
+			if (*s == '[') {
+				s++;
+				while (*s && (*s < '@' || *s > '~')) s++;
+				if (*s) s++;
+			}
+			continue;
+		}
+		int len = 1;
+		if ((c & 0xe0) == 0xc0)
+			len = 2;
+		else if ((c & 0xf0) == 0xe0)
+			len = 3;
+		else if ((c & 0xf8) == 0xf0)
+			len = 4;
+		s += len;
+		w++;
+	}
+	return w;
+}
+
 void copy_to_sys_clipboard(const char *text) {
 	if (!text || !text[0]) return;
 	const char *cmds[] = {"xclip -selection clipboard", "xsel --clipboard --input", "wl-copy",
