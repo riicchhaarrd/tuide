@@ -15,6 +15,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup MSYS2 (Windows)
         if: runner.os == 'Windows'
@@ -44,15 +46,74 @@ jobs:
           BIN="tuide.exe"
           zip "dist/tuide-${TAG}-windows-${ARCH}.zip" "$BIN" README.md
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
         run: |
           mkdir -p dist
           TAG="${GITHUB_REF_NAME}"
-          OS="$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')"
           ARCH="$(uname -m)"
           BIN="tuide"
-          tar -czf "dist/${BIN}-${TAG}-${OS}-${ARCH}.tar.gz" "$BIN" README.md
+          tar -czf "dist/${BIN}-${TAG}-macos-${ARCH}.tar.gz" "$BIN" README.md
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          TAG="${GITHUB_REF_NAME}"
+          ARCH="$(uname -m)"
+          BIN="tuide"
+          VERSION="${TAG#v}"
+          tar -czf "dist/${BIN}-${TAG}-linux-${ARCH}.tar.gz" "$BIN" README.md
+
+      - name: Build .deb and .rpm (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm
+          sudo gem install fpm
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          # .deb
+          fpm -s dir -t deb \
+            -n tuide \
+            -v "${VERSION}" \
+            --description "Terminal UI for Git" \
+            --url "https://github.com/riicchhaarrd/tuide" \
+            --license "MIT" \
+            --depends git \
+            -p "dist/tuide_${VERSION}_amd64.deb" \
+            tuide=/usr/bin/tuide
+          # .rpm (replace - with ~ for RPM version)
+          RPM_VERSION="$(echo "${VERSION}" | tr '-' '~')"
+          fpm -s dir -t rpm \
+            -n tuide \
+            -v "${RPM_VERSION}" \
+            --description "Terminal UI for Git" \
+            --url "https://github.com/riicchhaarrd/tuide" \
+            --license "MIT" \
+            --depends git \
+            -p "dist/tuide-${RPM_VERSION}.x86_64.rpm" \
+            tuide=/usr/bin/tuide
+
+      - name: Build AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y imagemagick
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          # Create AppDir structure
+          mkdir -p AppDir/usr/bin
+          cp tuide AppDir/usr/bin/
+          cp packaging/AppRun AppDir/
+          chmod +x AppDir/AppRun
+          cp packaging/tuide.desktop AppDir/
+          # Generate a simple icon with ImageMagick
+          convert -size 256x256 xc:'#1a1a2e' \
+            -fill '#e94560' -gravity center -pointsize 72 -annotate 0 'T' \
+            AppDir/tuide.png
+          # Download appimagetool
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "dist/tuide-${TAG}-x86_64.AppImage"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -67,10 +128,36 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+            -exec sh -c 'sha256sum "$1" | sed "s|  \./[^/]*/|  |"' _ {} \; \
+            | sort -k2 > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Generate Scoop manifest
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          WIN_ZIP="dist/Windows-artifacts/tuide-${TAG}-windows-x86_64.zip"
+          if [ -f "$WIN_ZIP" ]; then
+            SHA256_WIN="$(sha256sum "$WIN_ZIP" | cut -d' ' -f1)"
+          else
+            SHA256_WIN="PLACEHOLDER"
+          fi
+          sed -e "s/__VERSION__/${VERSION}/g" \
+              -e "s/__SHA256_WIN__/${SHA256_WIN}/g" \
+              packaging/tuide.json.template > dist/tuide.json
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -80,3 +167,31 @@ jobs:
           files: |
             dist/**/*.tar.gz
             dist/**/*.zip
+            dist/**/*.deb
+            dist/**/*.rpm
+            dist/**/*.AppImage
+            dist/checksums-sha256.txt
+            dist/tuide.json
+
+      - name: Update Homebrew tap
+        if: "!contains(github.ref_name, '-rc')"
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          SOURCE_URL="https://github.com/riicchhaarrd/tuide/archive/refs/tags/${TAG}.tar.gz"
+          curl -fsSL -o source.tar.gz "$SOURCE_URL"
+          SHA256="$(sha256sum source.tar.gz | cut -d' ' -f1)"
+          sed -e "s/__VERSION__/${VERSION}/g" \
+              -e "s/__SHA256__/${SHA256}/g" \
+              packaging/tuide.rb.template > tuide.rb
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/riicchhaarrd/homebrew-tuide.git" tap
+          mkdir -p tap/Formula
+          cp tuide.rb tap/Formula/tuide.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/tuide.rb
+          git diff --cached --quiet || git commit -m "Update tuide to ${VERSION}"
+          git push

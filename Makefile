@@ -1,5 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c99 -g
+VERSION := $(shell git describe --tags --always 2>/dev/null || echo "unknown")
+CFLAGS = -Wall -Wextra -std=c99 -g -DVERSION=\"$(VERSION)\"
 SRC = $(wildcard src/*.c) $(wildcard src/views/*.c)
 OBJ = $(SRC:.c=.o)
 TARGET = tuide

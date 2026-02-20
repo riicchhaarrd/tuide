@@ -1,0 +1,18 @@
+class Tuide < Formula
+  desc "Terminal UI for Git"
+  homepage "https://github.com/riicchhaarrd/tuide"
+  url "https://github.com/riicchhaarrd/tuide/archive/refs/tags/v__VERSION__.tar.gz"
+  sha256 "__SHA256__"
+  license "MIT"
+
+  depends_on "gcc" => :build
+
+  def install
+    system "make"
+    bin.install "tuide"
+  end
+
+  test do
+    assert_match "tuide", shell_output("#{bin}/tuide --version")
+  end
+end

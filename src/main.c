@@ -91,6 +91,14 @@ static void handle_sigint(int signal_num) {
 
 int main(int argc, char **argv) {
 	setlocale(LC_ALL, "");
+
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+			printf("tuide %s\n", VERSION);
+			return 0;
+		}
+	}
+
 	const char *edit_path = find_editor_path(argc, argv);
 	bool editor_mode = (edit_path != NULL);
 	if (!ensure_tty()) {

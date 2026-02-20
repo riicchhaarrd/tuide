@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=tuide
+Comment=Terminal UI for Git
+Exec=tuide
+Icon=tuide
+Type=Application
+Terminal=true
+Categories=Development;RevisionControl;

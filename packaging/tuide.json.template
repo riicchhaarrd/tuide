@@ -1,0 +1,13 @@
+{
+    "version": "__VERSION__",
+    "description": "Terminal UI for Git",
+    "homepage": "https://github.com/riicchhaarrd/tuide",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/riicchhaarrd/tuide/releases/download/v__VERSION__/tuide-v__VERSION__-windows-x86_64.zip",
+            "hash": "__SHA256_WIN__"
+        }
+    },
+    "bin": "tuide.exe"
+}
