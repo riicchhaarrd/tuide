@@ -160,6 +160,13 @@ void editor_load(const char *path) {
 		t->ed.lines[t->ed.line_count++] = strdup(buf);
 	}
 	fclose(fp);
+	if (t->ed.line_count == 0) {
+		if (t->ed.line_capacity == 0) {
+			t->ed.line_capacity = 128;
+			t->ed.lines = malloc(sizeof(char *) * 128);
+		}
+		t->ed.lines[t->ed.line_count++] = strdup("");
+	}
 	t->ed.saved_hash = editor_content_hash(&t->ed);
 }
 
@@ -665,6 +672,9 @@ void handle_editor_key(Key key_event) {
 			break;
 		case KEY_CTRL_Y:
 			editor_redo(&g_app_state.tabs[g_app_state.tab_current].ed);
+			break;
+		case KEY_CTRL_Q:
+			g_app_state.running = false;
 			break;
 		case KEY_CTRL_W:
 			editor_close_tab();

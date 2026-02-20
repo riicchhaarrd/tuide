@@ -229,7 +229,7 @@ void draw_statusbar(void) {
 		else if (g_app_state.focus == FOCUS_EDITOR)
 			hint =
 				"Arrows:move  Shift+Arrows:select  n/N:find  Ctrl+F:search  Ctrl+Z:undo  "
-				"Ctrl+S:save  "
+				"Ctrl+S:save  Ctrl+Q:quit  "
 				"V:vi";
 		else
 			hint = "↑/↓:scroll  g/G:top/bot  s:split  W:wrap  q:back  T:theme";
@@ -245,7 +245,7 @@ void draw_statusbar(void) {
 		else
 			hint =
 				"Arrows:move  Shift:select  n/N:find next/prev  Ctrl+F:search  Ctrl+Z:undo  "
-				"Ctrl+Y:redo  "
+				"Ctrl+Y:redo  Ctrl+Q:quit  "
 				"Ctrl+X:cut  Ctrl+C:copy  Ctrl+S:save";
 	} else if (g_app_state.current_view == VIEW_HELP)
 		hint = "q:close help";

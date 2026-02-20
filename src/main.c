@@ -8,7 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
+#include "editor.h"
 #include "git.h"
 #include "input.h"
 #include "render.h"
@@ -18,6 +20,62 @@
 #include "util.h"
 
 static volatile int resize_pending = 0;
+
+static const char *find_editor_path(int argc, char **argv) {
+	const char *path = NULL;
+	bool after_dashdash = false;
+	for (int i = 1; i < argc; i++) {
+		const char *arg = argv[i];
+		if (!after_dashdash && strcmp(arg, "--") == 0) {
+			after_dashdash = true;
+			continue;
+		}
+		if (!after_dashdash && arg[0] == '-') continue;
+		path = arg;
+		if (after_dashdash) break;
+	}
+	return path;
+}
+
+static bool ensure_tty(void) {
+	if (!isatty(STDIN_FILENO)) {
+		int fd = open("/dev/tty", O_RDONLY);
+		if (fd >= 0) {
+			dup2(fd, STDIN_FILENO);
+			close(fd);
+		}
+	}
+	return isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
+}
+
+static bool ensure_file_exists(const char *path) {
+	FILE *fp = fopen(path, "a");
+	if (!fp) return false;
+	fclose(fp);
+	return true;
+}
+
+static void parent_dir(const char *path, char *out, size_t out_len) {
+	const char *slash = strrchr(path, '/');
+	if (!slash) {
+		snprintf(out, out_len, ".");
+		return;
+	}
+	size_t len = (size_t)(slash - path);
+	if (len == 0) len = 1;
+	if (len >= out_len) len = out_len - 1;
+	memcpy(out, path, len);
+	out[len] = '\0';
+}
+
+static bool is_git_internal_path(const char *path) {
+	if (!path || !path[0]) return false;
+	if (strcmp(path, ".git") == 0) return true;
+	if (strncmp(path, ".git/", 5) == 0) return true;
+	if (strstr(path, "/.git/") != NULL) return true;
+	size_t len = strlen(path);
+	return (len >= 5 && strcmp(path + len - 5, "/.git") == 0);
+}
 
 static void handle_sigwinch(int signal_num) {
 	(void)signal_num;
@@ -29,27 +87,32 @@ static void handle_sigint(int signal_num) {
 }
 
 int main(int argc, char **argv) {
-	(void)argc;
-	(void)argv;
-	if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+	const char *edit_path = find_editor_path(argc, argv);
+	bool editor_mode = (edit_path != NULL);
+	if (!ensure_tty()) {
 		fprintf(stderr, "tuide: requires a terminal\n");
 		return 1;
 	}
-	if (!in_git_repo()) {
+	bool in_repo = in_git_repo();
+	if (!editor_mode && !in_repo) {
 		fprintf(stderr, "tuide: not a git repository\n");
+		return 1;
+	}
+	if (editor_mode && !ensure_file_exists(edit_path)) {
+		fprintf(stderr, "tuide: failed to open %s\n", edit_path);
 		return 1;
 	}
 
 	memset(&g_app_state, 0, sizeof(g_app_state));
 	g_app_state.running = true;
 	g_app_state.current_view = VIEW_STATUS;
-	g_app_state.focus = FOCUS_CHANGES;
+	g_app_state.focus = editor_mode ? FOCUS_EDITOR : FOCUS_CHANGES;
 	g_app_state.theme_idx = 0;
 	g_app_state.clipboard = NULL;
 	g_app_state.col_hash_w = 9;
 	g_app_state.col_author_w = 14;
 	g_app_state.col_date_w = 13;
-	g_app_state.editor_active = false;
+	g_app_state.editor_active = editor_mode;
 	g_app_state.browser_active = false;
 	g_app_state.diff_sidebyside = true;
 	g_app_state.diff_continuous = false;
@@ -57,6 +120,20 @@ int main(int argc, char **argv) {
 	g_app_state.commit_msg_buf[0] = '\0';
 	g_app_state.commit_msg_cursor = 0;
 	g_app_state.commit_bar_focused = false;
+
+	if (editor_mode) {
+		editor_load(edit_path);
+		if (!g_app_state.tabs[g_app_state.tab_current].path[0]) {
+			fprintf(stderr, "tuide: failed to open %s\n", edit_path);
+			return 1;
+		}
+		if (!is_git_internal_path(edit_path)) {
+			char dir[1024];
+			g_app_state.browser_active = true;
+			parent_dir(edit_path, dir, sizeof(dir));
+			load_browser(dir);
+		}
+	}
 
 	signal(SIGWINCH, handle_sigwinch);
 	signal(SIGINT, handle_sigint);
@@ -69,7 +146,7 @@ int main(int argc, char **argv) {
 	fflush(stdout);
 
 	/* Initial load */
-	reload_all();
+	if (!editor_mode || in_repo) reload_all();
 
 	draw();
 	while (g_app_state.running) {
