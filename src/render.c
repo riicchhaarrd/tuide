@@ -1,9 +1,12 @@
+#define _XOPEN_SOURCE 700
 #include "render.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <locale.h>
 
 #include "term.h"
 
@@ -312,7 +315,8 @@ bool is_selected(int y, int x) {
 void ppad_ext(const char *s, int w, int y_idx, int pane_rx) {
 	if (w <= 0) return;
 	int vis = 0;
-	int actual_len = 0;
+	int display_width = 0;
+	mbstate_t state = {0};
 	const char *p = s;
 	while (*p) {
 		if (*p == '\x1b' && p[1] == '[') {
@@ -321,18 +325,22 @@ void ppad_ext(const char *s, int w, int y_idx, int pane_rx) {
 			if (*p == 'm') p++;
 			continue;
 		}
-		int len = 1;
-		if (((unsigned char)*p & 0xe0) == 0xc0)
-			len = 2;
-		else if (((unsigned char)*p & 0xf0) == 0xe0)
-			len = 3;
-		else if (((unsigned char)*p & 0xf8) == 0xf0)
-			len = 4;
-		p += len;
-		actual_len++;
+		wchar_t wc;
+		size_t len = mbrtowc(&wc, p, MB_CUR_MAX, &state);
+		if (len == (size_t)-1 || len == (size_t)-2) {
+			p++;
+			display_width++;
+		} else if (len == 0) {
+			break;
+		} else {
+			int width = wcwidth(wc);
+			if (width < 0) width = 1;
+			display_width += width;
+			p += len;
+		}
 	}
 
-	bool truncated = (actual_len > w);
+	bool truncated = (display_width > w);
 	int limit = truncated ? (w > 1 ? w - 1 : w) : w;
 
 	while (*s && vis < limit) {
@@ -362,16 +370,23 @@ void ppad_ext(const char *s, int w, int y_idx, int pane_rx) {
 			if (*s == 'm') s++;
 			continue;
 		}
-		int len = 1;
-		if (((unsigned char)*s & 0xe0) == 0xc0)
-			len = 2;
-		else if (((unsigned char)*s & 0xf0) == 0xe0)
-			len = 3;
-		else if (((unsigned char)*s & 0xf8) == 0xf0)
-			len = 4;
+		wchar_t wc;
+		mbstate_t mb_state = {0};
+		size_t len = mbrtowc(&wc, s, MB_CUR_MAX, &mb_state);
+		int char_width = 1;
+		if (len == (size_t)-1 || len == (size_t)-2) {
+			len = 1;
+		} else if (len == 0) {
+			break;
+		} else {
+			int width = wcwidth(wc);
+			if (width < 0) width = 1;
+			char_width = width;
+			if (vis + char_width > limit) break;
+		}
 
 		char tmp[8] = {0};
-		for (int i = 0; i < len && *s; i++) tmp[i] = *s++;
+		for (size_t i = 0; i < len && *s; i++) tmp[i] = *s++;
 
 		bool sel = false;
 		if (y_idx != -1) {
@@ -388,7 +403,7 @@ void ppad_ext(const char *s, int w, int y_idx, int pane_rx) {
 			put_cell(g_app_state.cur_r, g_app_state.cur_c, tmp);
 		}
 		g_app_state.cur_c++;
-		vis++;
+		vis += char_width;
 	}
 	if (truncated && w >= 1) {
 		put_cell(g_app_state.cur_r, g_app_state.cur_c, "…");

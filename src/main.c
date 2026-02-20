@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <locale.h>
 
 #include "editor.h"
 #include "git.h"
@@ -88,6 +89,7 @@ static void handle_sigint(int signal_num) {
 }
 
 int main(int argc, char **argv) {
+	setlocale(LC_ALL, "");
 	const char *edit_path = find_editor_path(argc, argv);
 	bool editor_mode = (edit_path != NULL);
 	if (!ensure_tty()) {

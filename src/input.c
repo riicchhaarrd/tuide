@@ -836,6 +836,7 @@ static void handle_mouse(MouseEvt m) {
 				int t = g_app_state.diff_scroll + (m.row - diff_top);
 				if (t >= 0 && t < g_app_state.diff_count) {
 					g_app_state.diff_sel = t;
+					focus_diff_pane();
 					open_diff_summary_at(t);
 				}
 			}
@@ -959,6 +960,7 @@ static void handle_mouse(MouseEvt m) {
 					int t = g_app_state.diff_scroll + (m.row - diff_top);
 					if (t >= 0 && t < g_app_state.diff_count) {
 						g_app_state.diff_sel = t;
+						focus_diff_pane();
 						open_diff_summary_at(t);
 						return;
 					}

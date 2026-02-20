@@ -1,10 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
+#define _XOPEN_SOURCE 700
 #include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <locale.h>
 
 int iclamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -20,9 +23,9 @@ void strtrim(char *s) {
 int str_display_width(const char *s) {
 	if (!s) return 0;
 	int w = 0;
+	mbstate_t state = {0};
 	while (*s) {
-		unsigned char c = (unsigned char)*s;
-		if (c == 0x1b) {
+		if (*s == 0x1b) {
 			s++;
 			if (*s == '[') {
 				s++;
@@ -31,15 +34,20 @@ int str_display_width(const char *s) {
 			}
 			continue;
 		}
-		int len = 1;
-		if ((c & 0xe0) == 0xc0)
-			len = 2;
-		else if ((c & 0xf0) == 0xe0)
-			len = 3;
-		else if ((c & 0xf8) == 0xf0)
-			len = 4;
-		s += len;
-		w++;
+		wchar_t wc;
+		size_t len = mbrtowc(&wc, s, MB_CUR_MAX, &state);
+		if (len == (size_t)-1 || len == (size_t)-2) {
+			// Invalid sequence, count as 1 and advance
+			s++;
+			w++;
+		} else if (len == 0) {
+			break; // null character
+		} else {
+			int width = wcwidth(wc);
+			if (width < 0) width = 1; // non-printable or control char
+			w += width;
+			s += len;
+		}
 	}
 	return w;
 }
