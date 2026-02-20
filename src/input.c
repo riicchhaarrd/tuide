@@ -37,6 +37,12 @@ static const char *resolve_external_editor(void) {
 	return "vi";
 }
 
+static void invalidate_front_buffer(void) {
+	if (!g_app_state.front.cells) return;
+	memset(g_app_state.front.cells, 0,
+		   g_app_state.front.w * g_app_state.front.h * sizeof(Cell));
+}
+
 /* Open current file/path in $VISUAL/$EDITOR/vi */
 static void action_open_in_editor_extern(const char *path) {
 	if (!path || !path[0]) return;
@@ -62,7 +68,7 @@ static void action_open_in_editor_extern(const char *path) {
 	printf(T_ALT T_HIDE T_MOUSE_ON T_CLEAR);
 	fflush(stdout);
 	get_winsize();
-	buf_clear(&g_app_state.front); /* force redraw */
+	invalidate_front_buffer(); /* force full redraw after external editor */
 	reload_all();
 	OK("Returned from %s", ed);
 }
