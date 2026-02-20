@@ -284,10 +284,35 @@ static void handle_mouse(MouseEvt m) {
 					if (in_top) {
 						g_app_state.file_scroll = imax(0, g_app_state.file_scroll + delta);
 					} else {
+						/* Scroll through files in expanded commits, not just commits */
 						int gvis = g_app_state.layout_height_graph - 2;
 						int step = su ? -1 : 1;
-						msel(&g_app_state.commit_sel, &g_app_state.commit_scroll,
-							 g_app_state.commit_count, step, gvis, true);
+						GitCommit *c = &g_app_state.commits[g_app_state.commit_sel];
+						if (step > 0) {
+							/* Scrolling down */
+							if (c->expanded && g_app_state.graph_file_sel < c->file_count - 1) {
+								g_app_state.graph_file_sel++;
+							} else {
+								msel(&g_app_state.commit_sel, &g_app_state.commit_scroll,
+									 g_app_state.commit_count, step, gvis, true);
+								g_app_state.graph_file_sel = -1;
+							}
+						} else {
+							/* Scrolling up */
+							if (c->expanded && g_app_state.graph_file_sel >= 0) {
+								g_app_state.graph_file_sel--;
+							} else {
+								int prev_sel = g_app_state.commit_sel;
+								msel(&g_app_state.commit_sel, &g_app_state.commit_scroll,
+									 g_app_state.commit_count, step, gvis, true);
+								c = &g_app_state.commits[g_app_state.commit_sel];
+								if (c->expanded && prev_sel != g_app_state.commit_sel)
+									g_app_state.graph_file_sel = c->file_count - 1;
+								else
+									g_app_state.graph_file_sel = -1;
+							}
+						}
+						if (g_app_state.commit_count > 0) sync_graph_preview();
 					}
 				}
 			} else {
