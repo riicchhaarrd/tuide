@@ -467,7 +467,14 @@ static void handle_mouse(MouseEvt m) {
 														  at dtop. Content at dtop+2 usually. */
 			/* Check view_editor.c: row starts at top+2 */
 			g_app_state.ed_sel_end_y = ed->scroll_row + (m.row - (dtop + 2));
-			g_app_state.ed_sel_end_x = m.col - (drx + 7) + ed->scroll_col;
+			/* Convert screen column to character index, accounting for tabs */
+			int screen_col = m.col - (drx + 7);
+			if (g_app_state.ed_sel_end_y >= 0 && g_app_state.ed_sel_end_y < ed->line_count) {
+				const char *line = ed->lines[g_app_state.ed_sel_end_y];
+				g_app_state.ed_sel_end_x = screen_col_to_char_idx(line + ed->scroll_col, screen_col, 8) + ed->scroll_col;
+			} else {
+				g_app_state.ed_sel_end_x = screen_col + ed->scroll_col;
+			}
 			return;
 		}
 		if (g_app_state.selecting) {
@@ -638,12 +645,16 @@ static void handle_mouse(MouseEvt m) {
 			g_app_state.ed_selecting = true;
 			g_app_state.ed_sel_start_y = g_app_state.ed_sel_end_y =
 				ed->scroll_row + (m.row - (dtop + 2));
-			g_app_state.ed_sel_start_x = g_app_state.ed_sel_end_x =
-				m.col - (drx + 7) + ed->scroll_col;
+			/* Convert screen column to character index, accounting for tabs */
+			int screen_col = m.col - (drx + 7);
 			if (g_app_state.ed_sel_start_y >= 0 && g_app_state.ed_sel_start_y < ed->line_count) {
+				const char *line = ed->lines[g_app_state.ed_sel_start_y];
+				g_app_state.ed_sel_start_x = g_app_state.ed_sel_end_x =
+					screen_col_to_char_idx(line + ed->scroll_col, screen_col, 8) + ed->scroll_col;
 				ed->cursor_row = g_app_state.ed_sel_start_y;
-				ed->cursor_col =
-					iclamp(g_app_state.ed_sel_start_x, 0, (int)strlen(ed->lines[ed->cursor_row]));
+				ed->cursor_col = iclamp(g_app_state.ed_sel_start_x, 0, (int)strlen(line));
+			} else {
+				g_app_state.ed_sel_start_x = g_app_state.ed_sel_end_x = screen_col + ed->scroll_col;
 			}
 			g_app_state.focus = FOCUS_EDITOR;
 			return;

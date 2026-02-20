@@ -52,6 +52,56 @@ int str_display_width(const char *s) {
 	return w;
 }
 
+int screen_col_to_char_idx(const char *line, int screen_col, int tab_width) {
+	if (!line) return 0;
+	int visual_col = 0;
+	int char_idx = 0;
+	while (line[char_idx] && visual_col < screen_col) {
+		if (line[char_idx] == '\t') {
+			/* Tab advances to next multiple of tab_width */
+			int next_tab_stop = ((visual_col / tab_width) + 1) * tab_width;
+			visual_col = next_tab_stop;
+		} else {
+			visual_col++;
+		}
+		char_idx++;
+	}
+	/* If we're past the target, find the closest character */
+	if (visual_col > screen_col && char_idx > 0) {
+		/* Back up to see if previous character is closer */
+		int prev_visual = 0;
+		int prev_idx = 0;
+		for (int i = 0; i < char_idx - 1; i++) {
+			if (line[i] == '\t') {
+				int next_tab = ((prev_visual / tab_width) + 1) * tab_width;
+				prev_visual = next_tab;
+			} else {
+				prev_visual++;
+			}
+			prev_idx++;
+		}
+		/* Use the closer position */
+		if (screen_col - prev_visual < visual_col - screen_col) {
+			return prev_idx;
+		}
+	}
+	return char_idx;
+}
+
+int char_idx_to_screen_col(const char *line, int char_idx, int tab_width) {
+	if (!line) return 0;
+	int visual_col = 0;
+	for (int i = 0; i < char_idx && line[i]; i++) {
+		if (line[i] == '\t') {
+			/* Tab advances to next multiple of tab_width */
+			visual_col = ((visual_col / tab_width) + 1) * tab_width;
+		} else {
+			visual_col++;
+		}
+	}
+	return visual_col;
+}
+
 void copy_to_sys_clipboard(const char *text) {
 	if (!text || !text[0]) return;
 	const char *cmds[] = {"xclip -selection clipboard", "xsel --clipboard --input", "wl-copy",
