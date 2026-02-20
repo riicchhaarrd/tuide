@@ -576,8 +576,9 @@ static void handle_mouse(MouseEvt m) {
 	}
 
 	/* Main Area Clicks */
+	int diff_top = diff_content_start_row(dtop);
 	if (cl && (g_app_state.current_view == VIEW_STATUS || g_app_state.current_view == VIEW_LOG) &&
-		m.col > drx && m.row > dtop && m.row < g_app_state.rows - 1) {
+		m.col > drx && m.row >= diff_top && m.row < g_app_state.rows - 1) {
 		if (right_pane_is_editor_content()) {
 			Editor *ed = &g_app_state.tabs[g_app_state.tab_current].ed;
 			if (m.col >= g_app_state.editor_scrollbar_x &&
@@ -649,7 +650,6 @@ static void handle_mouse(MouseEvt m) {
 				return;
 			}
 
-			int diff_top = diff_content_start_row(dtop);
 			g_app_state.selecting = true;
 			g_app_state.sel_start_y = g_app_state.sel_end_y =
 				g_app_state.diff_scroll + (m.row - diff_top);
