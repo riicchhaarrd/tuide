@@ -68,6 +68,7 @@ bool config_parse_main(const char *path, Config *cfg);
 void config_load(void);
 bool config_save_default(const char *path);
 void config_apply_general(void);
+void config_save_general(void);
 Config *config_get(void);
 
 /* Built-in theme count */

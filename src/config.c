@@ -419,6 +419,100 @@ void config_apply_general(void) {
     }
 }
 
+/* Update a key in a specific section of the config file.
+ * Reads the file, replaces or inserts the key=value, writes back. */
+static bool config_update_key(const char *path, const char *section_name,
+                              const char *key, const char *value) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return false;
+
+    /* Read entire file into memory */
+    char lines[256][512];
+    int line_count = 0;
+    while (line_count < 256 && fgets(lines[line_count], sizeof(lines[0]), fp)) {
+        line_count++;
+    }
+    fclose(fp);
+
+    /* Find and update the key in the target section */
+    char section[64] = {0};
+    bool found = false;
+    int last_section_line = -1;  /* Last non-empty line in target section */
+    bool in_target = false;
+
+    for (int i = 0; i < line_count; i++) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "%s", lines[i]);
+        size_t len = strlen(buf);
+        if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
+        char *trimmed = trim(buf);
+
+        if (trimmed[0] == '[') {
+            char *end = strchr(trimmed, ']');
+            if (end) {
+                *end = '\0';
+                snprintf(section, sizeof(section), "%s", trimmed + 1);
+                in_target = (strcmp(section, section_name) == 0);
+                if (in_target) last_section_line = i;
+                continue;
+            }
+        }
+
+        if (in_target) {
+            if (trimmed[0] && trimmed[0] != '#') last_section_line = i;
+            char *eq = strchr(trimmed, '=');
+            if (eq) {
+                *eq = '\0';
+                char *k = trim(trimmed);
+                if (strcmp(k, key) == 0) {
+                    snprintf(lines[i], sizeof(lines[0]), "%s = %s\n", key, value);
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* If key not found, insert after last line in target section */
+    if (!found && last_section_line >= 0 && line_count < 255) {
+        int insert_at = last_section_line + 1;
+        for (int i = line_count; i > insert_at; i--) {
+            memcpy(lines[i], lines[i-1], sizeof(lines[0]));
+        }
+        snprintf(lines[insert_at], sizeof(lines[0]), "%s = %s\n", key, value);
+        line_count++;
+    }
+
+    /* Write back */
+    fp = fopen(path, "w");
+    if (!fp) return false;
+    for (int i = 0; i < line_count; i++) {
+        fputs(lines[i], fp);
+    }
+    fclose(fp);
+    return true;
+}
+
+/* Save current toggle settings to config file */
+void config_save_general(void) {
+    const char *path = config_get_path();
+
+    /* If config file doesn't exist, create it first */
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        config_save_default(path);
+    } else {
+        fclose(fp);
+    }
+
+    config_update_key(path, "general", "diff_sidebyside",
+                      g_app_state.diff_sidebyside ? "true" : "false");
+    config_update_key(path, "general", "diff_wrap",
+                      g_app_state.diff_wrap ? "true" : "false");
+    config_update_key(path, "general", "diff_continuous",
+                      g_app_state.diff_continuous ? "true" : "false");
+}
+
 /* Load configuration */
 void config_load(void) {
     memset(&g_config, 0, sizeof(Config));
