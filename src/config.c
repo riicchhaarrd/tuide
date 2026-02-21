@@ -311,6 +311,8 @@ bool config_parse_main(const char *path, Config *cfg) {
                 cfg->general.col_author_width = atoi(value);
             } else if (strcmp(key, "col_date_width") == 0) {
                 cfg->general.col_date_width = atoi(value);
+            } else if (strcmp(key, "auto_watch") == 0) {
+                cfg->general.auto_watch = parse_bool(value, true);
             }
         } else if (strcmp(section, "keybindings") == 0) {
             if (cfg->keybinding_count < 50) {
@@ -365,6 +367,9 @@ bool config_save_default(const char *path) {
     fprintf(fp, "diff_wrap = false\n");
     fprintf(fp, "diff_continuous = false\n");
     fprintf(fp, "\n");
+    fprintf(fp, "# Auto-refresh when files change (polls .git/index every 2s)\n");
+    fprintf(fp, "auto_watch = true\n");
+    fprintf(fp, "\n");
     fprintf(fp, "# Column widths in log view\n");
     fprintf(fp, "col_hash_width = 9\n");
     fprintf(fp, "col_author_width = 14\n");
@@ -407,6 +412,7 @@ void config_apply_general(void) {
     g_app_state.diff_sidebyside = g_config.general.diff_sidebyside;
     g_app_state.diff_wrap = g_config.general.diff_wrap;
     g_app_state.diff_continuous = g_config.general.diff_continuous;
+    g_app_state.auto_watch = g_config.general.auto_watch;
 
     if (g_config.general.col_hash_width > 0) {
         g_app_state.col_hash_w = g_config.general.col_hash_width;
@@ -493,6 +499,8 @@ void state_load(void) {
             g_app_state.diff_wrap = parse_bool(value, g_app_state.diff_wrap);
         } else if (strcmp(key, "diff_continuous") == 0) {
             g_app_state.diff_continuous = parse_bool(value, g_app_state.diff_continuous);
+        } else if (strcmp(key, "auto_watch") == 0) {
+            g_app_state.auto_watch = parse_bool(value, g_app_state.auto_watch);
         }
     }
     fclose(fp);
@@ -509,6 +517,7 @@ void state_save(void) {
     fprintf(fp, "diff_sidebyside = %s\n", g_app_state.diff_sidebyside ? "true" : "false");
     fprintf(fp, "diff_wrap = %s\n", g_app_state.diff_wrap ? "true" : "false");
     fprintf(fp, "diff_continuous = %s\n", g_app_state.diff_continuous ? "true" : "false");
+    fprintf(fp, "auto_watch = %s\n", g_app_state.auto_watch ? "true" : "false");
 
     fclose(fp);
 }
@@ -524,6 +533,7 @@ void config_load(void) {
     g_config.general.diff_sidebyside = true;
     g_config.general.diff_wrap = false;
     g_config.general.diff_continuous = false;
+    g_config.general.auto_watch = true;
     g_config.general.col_hash_width = 9;
     g_config.general.col_author_width = 14;
     g_config.general.col_date_width = 13;

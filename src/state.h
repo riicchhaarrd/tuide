@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <termios.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "util.h"
@@ -186,6 +187,10 @@ typedef struct {
 
 	/* Repo */
 	char branch_name[128];
+	bool auto_watch;
+	time_t last_watch_time;
+	time_t last_index_mtime;
+	time_t last_head_mtime;
 
 	/* Editor & Browser */
 	Tab tabs[MAX_TABS];

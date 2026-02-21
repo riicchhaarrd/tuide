@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "render.h" /* For draw_flush if needed, though we use draw() from ui.h now */
@@ -565,6 +566,15 @@ void reload_all(void) {
 	load_branches();
 	load_stash();
 	update_diff();
+
+	/* Update watch mtimes so auto-watch doesn't immediately re-trigger */
+	struct stat st;
+	if (stat(".git/index", &st) == 0)
+		g_app_state.last_index_mtime = st.st_mtime;
+	if (stat(".git/HEAD", &st) == 0)
+		g_app_state.last_head_mtime = st.st_mtime;
+	g_app_state.last_watch_time = time(NULL);
+
 	OK("%s", UI->msg_refreshed);
 }
 

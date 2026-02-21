@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "git.h"
 #include "render.h" /* for TH */
 #include "state.h"
 #include "ui_strings.h"
@@ -272,6 +273,9 @@ void editor_save(void) {
 	t->ed.modified = false;
 	t->ed.saved_hash = editor_content_hash(&t->ed);
 	OK(UI->msg_saved_fmt, t->path);
+	if (in_git_repo()) {
+		reload_all();
+	}
 }
 
 static void editor_ensure_line(void) {

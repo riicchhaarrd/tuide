@@ -108,6 +108,7 @@ typedef struct {
 	const char *diff_continuous_on;
 	const char *diff_continuous_off;
 	const char *msg_diff_wrap_fmt;
+	const char *msg_auto_watch_fmt;
 	const char *toggle_on;
 	const char *toggle_off;
 

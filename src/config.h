@@ -35,6 +35,7 @@ typedef struct {
     bool diff_sidebyside;
     bool diff_wrap;
     bool diff_continuous;
+    bool auto_watch;
     int col_hash_width;
     int col_author_width;
     int col_date_width;

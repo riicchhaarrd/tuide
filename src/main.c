@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <locale.h>
@@ -80,6 +81,35 @@ static bool is_git_internal_path(const char *path) {
 	return (len >= 5 && strcmp(path + len - 5, "/.git") == 0);
 }
 
+#define WATCH_INTERVAL 2 /* seconds between mtime checks */
+
+static time_t file_mtime(const char *path) {
+	struct stat st;
+	if (stat(path, &st) == 0) return st.st_mtime;
+	return 0;
+}
+
+static void watch_snapshot(void) {
+	g_app_state.last_watch_time = time(NULL);
+	g_app_state.last_index_mtime = file_mtime(".git/index");
+	g_app_state.last_head_mtime = file_mtime(".git/HEAD");
+}
+
+static bool watch_check(void) {
+	if (!g_app_state.auto_watch) return false;
+	time_t now = time(NULL);
+	if (now - g_app_state.last_watch_time < WATCH_INTERVAL) return false;
+	g_app_state.last_watch_time = now;
+	time_t idx = file_mtime(".git/index");
+	time_t head = file_mtime(".git/HEAD");
+	if (idx != g_app_state.last_index_mtime || head != g_app_state.last_head_mtime) {
+		g_app_state.last_index_mtime = idx;
+		g_app_state.last_head_mtime = head;
+		return true;
+	}
+	return false;
+}
+
 static void handle_sigwinch(int signal_num) {
 	(void)signal_num;
 	resize_pending = 1;
@@ -148,6 +178,7 @@ int main(int argc, char **argv) {
 	g_app_state.diff_sidebyside = true;
 	g_app_state.diff_continuous = false;
 	g_app_state.diff_wrap = false;
+	g_app_state.auto_watch = true;
 	g_app_state.commit_msg_buf[0] = '\0';
 	g_app_state.commit_msg_cursor = 0;
 	g_app_state.commit_bar_focused = false;
@@ -184,6 +215,9 @@ int main(int argc, char **argv) {
 	/* Initial load */
 	if (!editor_mode || in_repo) reload_all();
 
+	/* Snapshot git index mtime for auto-watch */
+	if (in_repo) watch_snapshot();
+
 	draw();
 	while (g_app_state.running) {
 		Key key = read_key();
@@ -194,6 +228,9 @@ int main(int argc, char **argv) {
 			resize_pending = 0;
 			get_winsize();
 			printf(T_CLEAR);
+			draw();
+		} else if (in_repo && watch_check()) {
+			reload_all();
 			draw();
 		}
 	}

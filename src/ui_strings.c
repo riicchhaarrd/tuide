@@ -169,6 +169,7 @@ const UiStrings UI_EN = {
 	.diff_continuous_on = "ON (full context)",
 	.diff_continuous_off = "OFF (hunks only)",
 	.msg_diff_wrap_fmt = "Diff wrap: %s",
+	.msg_auto_watch_fmt = "Auto-watch: %s",
 	.toggle_on = "ON",
 	.toggle_off = "OFF",
 
