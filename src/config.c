@@ -419,98 +419,98 @@ void config_apply_general(void) {
     }
 }
 
-/* Update a key in a specific section of the config file.
- * Reads the file, replaces or inserts the key=value, writes back. */
-static bool config_update_key(const char *path, const char *section_name,
-                              const char *key, const char *value) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) return false;
+/* Get XDG state directory path */
+static const char *state_get_dir(void) {
+    static char dir_path[512] = {0};
+    if (dir_path[0]) return dir_path;
 
-    /* Read entire file into memory */
-    char lines[256][512];
-    int line_count = 0;
-    while (line_count < 256 && fgets(lines[line_count], sizeof(lines[0]), fp)) {
-        line_count++;
-    }
-    fclose(fp);
-
-    /* Find and update the key in the target section */
-    char section[64] = {0};
-    bool found = false;
-    int last_section_line = -1;  /* Last non-empty line in target section */
-    bool in_target = false;
-
-    for (int i = 0; i < line_count; i++) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "%s", lines[i]);
-        size_t len = strlen(buf);
-        if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
-        char *trimmed = trim(buf);
-
-        if (trimmed[0] == '[') {
-            char *end = strchr(trimmed, ']');
-            if (end) {
-                *end = '\0';
-                snprintf(section, sizeof(section), "%s", trimmed + 1);
-                in_target = (strcmp(section, section_name) == 0);
-                if (in_target) last_section_line = i;
-                continue;
-            }
-        }
-
-        if (in_target) {
-            if (trimmed[0] && trimmed[0] != '#') last_section_line = i;
-            char *eq = strchr(trimmed, '=');
-            if (eq) {
-                *eq = '\0';
-                char *k = trim(trimmed);
-                if (strcmp(k, key) == 0) {
-                    snprintf(lines[i], sizeof(lines[0]), "%s = %s\n", key, value);
-                    found = true;
-                    break;
-                }
-            }
+    const char *xdg_state = getenv("XDG_STATE_HOME");
+    if (xdg_state && xdg_state[0]) {
+        snprintf(dir_path, sizeof(dir_path), "%s/tuide", xdg_state);
+    } else {
+        const char *home = getenv("HOME");
+        if (home && home[0]) {
+            snprintf(dir_path, sizeof(dir_path), "%s/.local/state/tuide", home);
+        } else {
+            snprintf(dir_path, sizeof(dir_path), "/tmp/tuide");
         }
     }
-
-    /* If key not found, insert after last line in target section */
-    if (!found && last_section_line >= 0 && line_count < 255) {
-        int insert_at = last_section_line + 1;
-        for (int i = line_count; i > insert_at; i--) {
-            memcpy(lines[i], lines[i-1], sizeof(lines[0]));
-        }
-        snprintf(lines[insert_at], sizeof(lines[0]), "%s = %s\n", key, value);
-        line_count++;
-    }
-
-    /* Write back */
-    fp = fopen(path, "w");
-    if (!fp) return false;
-    for (int i = 0; i < line_count; i++) {
-        fputs(lines[i], fp);
-    }
-    fclose(fp);
-    return true;
+    return dir_path;
 }
 
-/* Save current toggle settings to config file */
-void config_save_general(void) {
-    const char *path = config_get_path();
+/* Get state file path */
+static const char *state_get_path(void) {
+    static char st_path[512] = {0};
+    if (st_path[0]) return st_path;
 
-    /* If config file doesn't exist, create it first */
-    FILE *fp = fopen(path, "r");
-    if (!fp) {
-        config_save_default(path);
-    } else {
-        fclose(fp);
+    const char *dir = state_get_dir();
+    snprintf(st_path, sizeof(st_path), "%s/state", dir);
+    return st_path;
+}
+
+/* Ensure state directory exists (create parent dirs as needed) */
+static void ensure_state_dir(void) {
+    const char *dir = state_get_dir();
+    struct stat st = {0};
+    if (stat(dir, &st) == 0) return;
+
+    /* Create ~/.local/state if needed */
+    char parent[512];
+    const char *home = getenv("HOME");
+    if (home && home[0]) {
+        snprintf(parent, sizeof(parent), "%s/.local", home);
+        if (stat(parent, &st) == -1) mkdir(parent, 0755);
+        snprintf(parent, sizeof(parent), "%s/.local/state", home);
+        if (stat(parent, &st) == -1) mkdir(parent, 0755);
     }
+    mkdir(dir, 0755);
+}
 
-    config_update_key(path, "general", "diff_sidebyside",
-                      g_app_state.diff_sidebyside ? "true" : "false");
-    config_update_key(path, "general", "diff_wrap",
-                      g_app_state.diff_wrap ? "true" : "false");
-    config_update_key(path, "general", "diff_continuous",
-                      g_app_state.diff_continuous ? "true" : "false");
+/* Load runtime state (overrides config defaults) */
+void state_load(void) {
+    const char *path = state_get_path();
+    FILE *fp = fopen(path, "r");
+    if (!fp) return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\n') line[len-1] = '\0';
+
+        char *trimmed = trim(line);
+        if (!trimmed[0] || trimmed[0] == '#') continue;
+
+        char *eq = strchr(trimmed, '=');
+        if (!eq) continue;
+
+        *eq = '\0';
+        char *key = trim(trimmed);
+        char *value = trim(eq + 1);
+
+        if (strcmp(key, "diff_sidebyside") == 0) {
+            g_app_state.diff_sidebyside = parse_bool(value, g_app_state.diff_sidebyside);
+        } else if (strcmp(key, "diff_wrap") == 0) {
+            g_app_state.diff_wrap = parse_bool(value, g_app_state.diff_wrap);
+        } else if (strcmp(key, "diff_continuous") == 0) {
+            g_app_state.diff_continuous = parse_bool(value, g_app_state.diff_continuous);
+        }
+    }
+    fclose(fp);
+}
+
+/* Save runtime state to state file */
+void state_save(void) {
+    ensure_state_dir();
+
+    const char *path = state_get_path();
+    FILE *fp = fopen(path, "w");
+    if (!fp) return;
+
+    fprintf(fp, "diff_sidebyside = %s\n", g_app_state.diff_sidebyside ? "true" : "false");
+    fprintf(fp, "diff_wrap = %s\n", g_app_state.diff_wrap ? "true" : "false");
+    fprintf(fp, "diff_continuous = %s\n", g_app_state.diff_continuous ? "true" : "false");
+
+    fclose(fp);
 }
 
 /* Load configuration */

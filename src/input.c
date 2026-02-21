@@ -8,7 +8,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "config.h"
 #include "editor.h"
 #include "git.h"
 #include "render.h" /* for draw_flush in action_push/pull if needed, but actions are in git.c */
@@ -565,18 +564,18 @@ static void handle_mouse(MouseEvt m) {
 
 			if (m.col >= btn1_start && m.col < btn1_start + btn1_len) {
 				g_app_state.diff_sidebyside = !g_app_state.diff_sidebyside;
-				config_save_general();
+
 				return;
 			}
 			if (m.col >= btn2_start && m.col < btn2_start + btn2_len) {
 				g_app_state.diff_continuous = !g_app_state.diff_continuous;
 				refresh_diff_after_context_toggle();
-				config_save_general();
+
 				return;
 			}
 			if (m.col >= btn3_start && m.col < btn3_start + btn3_len) {
 				g_app_state.diff_wrap = !g_app_state.diff_wrap;
-				config_save_general();
+
 				return;
 			}
 		} else if (editor_visible) {
@@ -1317,7 +1316,7 @@ void handle_key(Key k) {
 			case 'H':
 				g_app_state.diff_continuous = !g_app_state.diff_continuous;
 				refresh_diff_after_context_toggle();
-				config_save_general();
+
 				OK(UI->msg_continuous_diff_fmt,
 				   g_app_state.diff_continuous ? UI->diff_continuous_on
 											  : UI->diff_continuous_off);
@@ -1334,7 +1333,7 @@ void handle_key(Key k) {
 			}
 			case 'W':
 				g_app_state.diff_wrap = !g_app_state.diff_wrap;
-				config_save_general();
+
 				OK(UI->msg_diff_wrap_fmt,
 				   g_app_state.diff_wrap ? UI->toggle_on : UI->toggle_off);
 				return;

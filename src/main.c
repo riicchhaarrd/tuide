@@ -137,8 +137,7 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	/* Apply general configuration settings */
-	config_apply_general();
+	/* Set defaults before config overrides */
 	g_app_state.clipboard = NULL;
 	g_app_state.col_hash_w = 9;
 	g_app_state.col_author_w = 14;
@@ -152,6 +151,10 @@ int main(int argc, char **argv) {
 	g_app_state.commit_msg_buf[0] = '\0';
 	g_app_state.commit_msg_cursor = 0;
 	g_app_state.commit_bar_focused = false;
+
+	/* Apply config, then state overrides (state remembers last-used toggles) */
+	config_apply_general();
+	state_load();
 
 	if (editor_mode) {
 		editor_load(edit_path);
@@ -197,6 +200,10 @@ int main(int argc, char **argv) {
 
 	printf(T_NORM T_SHOW T_MOUSE_OFF T_RESET);
 	term_restore();
+
+	/* Save runtime state (toggle settings) */
+	state_save();
+
 	free(g_app_state.front.cells);
 	free(g_app_state.back.cells);
 
